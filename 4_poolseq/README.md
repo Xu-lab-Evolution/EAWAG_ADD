@@ -4,7 +4,7 @@ Raw data is available at NCBI SRA under the BioProject number PRJNA849360.
 
 ### Data processing
 
-Steps below are computationally intensive, so in the folder `0_data` here we provide all the inputs to reproduce graphs and analyses.
+Steps below are computationally intensive and intermediate files are several GB in size, so in the folder `0_data` here we provide all the inputs to reproduce graphs and analyses.
 
 **1.** [organize data](/4_poolseq/1_organize)
 
