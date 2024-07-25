@@ -23,3 +23,7 @@ Steps below are computationally intensive and intermediate files are several GB 
 **8.** [run CMH](/4_poolseq/8_cmh)
 
 ### Visualization and analyses
+
+**9.** [run CMH](/4_poolseq/9_manhattan_plots)
+
+**10.** [run CMH](/4_poolseq/10_snp_frequency)
