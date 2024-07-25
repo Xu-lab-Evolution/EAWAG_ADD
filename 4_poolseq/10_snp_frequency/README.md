@@ -76,7 +76,6 @@ plot.fun <- function(chromosome, snip, pvaluemodel, newchr){
     scale_color_manual(name = "Legend", values=c("#252525", "#56b4e8", "#8c0000"), labels = c("Initial", "Control", "Aphid"), breaks = c("Initial", "Control", "Aphid")) +
     scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
     scale_x_discrete(breaks = c("0", "6", "16"), labels = c("initial", "2021", "2022")) +
-    #ggtitle(paste0(snp_id)) +
     annotate("text", x = 0.5, y= c(0.25, 0.15), hjust = 0, label = c(paste0(newchr, ":", snip),
                                                       paste0("P = ", pvaluemodel))) +
     xlab("time") +
