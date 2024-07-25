@@ -42,7 +42,6 @@ dat1 <- merge(dat1a, treat, by="group")
 
 dat1$host_group <- NULL
 dat1$host_group2 <- NULL
-#head(dat1)
 
 # produce binomial variables (replace R and S with 0 and 1).
 
