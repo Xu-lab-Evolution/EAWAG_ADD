@@ -38,4 +38,4 @@ awk -F' ' 'NR==FNR{ids[$1]; next} $4 in ids' snplist.txt tmp.2021.txt > filt.cmh
 awk -F' ' 'NR==FNR{ids[$1]; next} $4 in ids' snplist.txt tmp.2022.txt > filt.cmh2022.txt
 ```
 
-Files `filt.cmh2021.txt` and `filt.cmh2022.txt` are available inside the folder `0_data`.
+Files `filt.cmh2021.txt` and `filt.cmh2022.txt` are available inside the folder `00_data`.

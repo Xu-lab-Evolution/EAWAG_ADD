@@ -1,6 +1,6 @@
 ### Run GLMM
 
-Input files `final.dp20_400.AD.txt`, `SequenceID_info.txt`, and `snplist.txt` are inside the `0_data` folder. This is computationally intensive, so the output `glmmTMB.rds` is inside the `0_data` folder as well.
+Input files `final.dp20_400.AD.txt`, `SequenceID_info.txt`, and `snplist.txt` are inside the `00_data` folder. This is computationally intensive, so the output `glmmTMB.rds` is inside the `00_data` folder as well.
 
 This is the R code to run the model using the inputs above:
 

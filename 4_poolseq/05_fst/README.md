@@ -186,4 +186,4 @@ snplist <- intersect(fst.df.t2$snp, fst.df.t1$snp)
 write.table(snplist, "fst_res/snplist.txt", row.names = F, col.names = F, quote=FALSE)
 ```
 
-Files `fst_df_t1.txt`, `fst_df_t2.txt`, and `snplist.txt` are available inside the folder `0_data`.
+Files `fst_df_t1.txt`, `fst_df_t2.txt`, and `snplist.txt` are available inside the folder `00_data`.

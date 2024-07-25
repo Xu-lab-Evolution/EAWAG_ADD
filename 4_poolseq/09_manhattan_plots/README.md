@@ -1,6 +1,6 @@
 ## Generate Manhattan plots
 
-Input files are located inside the `0_data` folder.
+Input files are located inside the folder `00_data`.
 
 ### General functions
 
