@@ -6,7 +6,6 @@ data.dm.transplant.kw25$Time<-"KW25";
 data.dm.transplant.kw30<-readxl::read_excel("./data/DaphinaTransPlant.xlsx",sheet = "KW30")
 data.dm.transplant.kw30$Time<-"KW30";
 
-
 dim(data.dm.transplant.kw30)
 dim(data.dm.transplant.kw25)
 head(data.dm.transplant.kw30)
@@ -34,7 +33,6 @@ Anova(model1,test.statistic = "F");
 model1<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+Self+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
 model2<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
 anova(model1, model2)
-
 
 model2<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
 summary(model1)
@@ -129,7 +127,6 @@ PlotTransplant<-function(data=NULL) {
   return(list(p.kw25,p.kw30));
 }
 
-
 DM.TransplatPlot<-PlotTransplant(data.dm.transplant)
 ggsave(DM.TransplatPlot[[1]], file="./Results/DM_transplant_KW25.pdf",height  =5.7,width  = 12.1) 
 ggsave(DM.TransplatPlot[[2]], file="./Results/DM_transplant_KW30.pdf",height  =5.7,width  = 12.1) 
@@ -206,7 +203,6 @@ head(data.feedback2022.duckweed.combined.GR)
 data.feedback2022.duckweed.combined.GR$Treatment<-factor(data.feedback2022.duckweed.combined.GR$Treatment,levels=c("Control","+Aphid"), ordered = T)
 data.feedback2022.duckweed.combined.GR$PondTreatment<-factor(data.feedback2022.duckweed.combined.GR$PondTreatment,levels=c("Control","Aphid"), ordered = T)
 
-
 data.feedback2022.duckweed.combined.RS<-rbind(data.feedback2022.duckweed.kw25.RS,data.feedback2022.duckweed.kw30.RS);
 data.feedback2022.duckweed.combined.RS$KW<-c(rep('KW25',nrow(data.feedback2022.duckweed.kw25.RS)),rep('KW30',nrow(data.feedback2022.duckweed.kw30.RS)))
 head(data.feedback2022.duckweed.combined.RS)
@@ -218,13 +214,11 @@ data.feedback2022.duckweed.GR.model2<-lmer(GR_N~Genotype+PondTreatment+ (1|Block
 
 data.feedback2022.duckweed.GR.model3<-lmer(GR_N~Genotype+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control",])
 
-
 (anova(data.feedback2022.duckweed.GR.model1,data.feedback2022.duckweed.GR.model2))
 
 (anova(data.feedback2022.duckweed.GR.model2,data.feedback2022.duckweed.GR.model3))
 
 Anova(data.feedback2022.duckweed.GR.model2, test.statistic = "F");
-
 
 data.feedback2022.duckweed.GR.model4<-lmer(GR_N~PondTreatment+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control" & 
                                                                                                                             data.feedback2022.duckweed.combined.GR$Genotype=="102",])
