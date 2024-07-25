@@ -10,7 +10,7 @@ library("parallel")
 library("ggpubr")
 
 EAWAG.count<-data.table::fread(file="data/final.dp20_400.AD.txt",sep="\t")
-EAWAG.count.clean<-EAWAG.count #%>% select(-all_of(drop.cols))
+EAWAG.count.clean<-EAWAG.count
 EAWAG.count.clean$CHROM <- gsub("D_magna_", "", EAWAG.count.clean$CHROM)
 
 sampleInfo<-read.table(file="data/SequenceID_info.txt",sep="\t",row.names=2,header = T)
