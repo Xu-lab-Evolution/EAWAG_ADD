@@ -96,10 +96,6 @@ rm final.ctrl.clear
 
 awk -F',' 'NR==FNR{ids[$1]; next} $4 in ids' ../sync_fst/snplist.txt final.herb.clear > filt.herb.clear
 rm final.herb.clear
-``
+```
 
 Files `filt.ctrl.clear` and `final.herb.clear`  are available inside the folder `0_data`.
-
-
-
-
