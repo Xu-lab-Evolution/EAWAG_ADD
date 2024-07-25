@@ -98,3 +98,43 @@ sed -i 's/\.AD//g' final.dp20_400.AD.txt
 ```
 
 The file `final.vcf.gz` is the finalized VCF file, while `final.dp20_400.AD.txt` is the input for the GLMM.
+
+Generate 3D plot
+
+```R
+EAWG.poolseq <- read.pcadapt("./data/final.dp20_400.recode.vcf.gz", type = "vcf");
+x <- pcadapt(input = EAWG.poolseq, K = 20);
+(x$singular.values**2/sum(x$singular.values**2))[1:5]
+
+poplist.int<-read.table(file="./data/SRRInfo.txt",sep="\t",header=T)
+poplist.int<-poplist.int[order(as.numeric(poplist.int$ID)),]
+
+data4plot<-data.frame(unlist(x$scores))
+colnames(data4plot)<-paste(rep("PC",20),seq(1:20),sep="");
+#dim(data4plot)
+data4plot$SampleID<-poplist.int$Run
+data4plot$Treatment<-poplist.int$Treatment
+data4plot$Year<-poplist.int$Time
+data4plot$Year<-as.factor(data4plot$Year)
+data4plot$color<-as.numeric(as.factor(data4plot$Treatment))
+data4plot$color[data4plot$color==1]<-"darkred";
+data4plot$color[data4plot$color==2]<-"#56B4E9";
+data4plot$color[data4plot$color==3]<-"grey";
+data4plot$shape<-as.numeric(as.factor(data4plot$Year))
+data4plot$shape[data4plot$shape==1]<-19
+data4plot$shape[data4plot$shape==2]<-11
+data4plot$shape[data4plot$shape==3]<-15
+
+pdf(file = "./Results/PCA_plot.pdf", width = 8, height = 6)
+EAWAG.3d<-scatterplot3d( data4plot[1:3],
+               color = data4plot$color,
+              type="h",
+  pch=data4plot$shape,
+  xlab="PC1 (19.5%)", ylab="PC2 (13.0%)", zlab="PC3 (7.9%)")
+
+legend(EAWAG.3d$xyz.convert(0.6, 0.2, 0.2), legend = c("Control","Aphid","Initial"),
+       col =  c('#56B4E9', 'darkred','grey'), pch = 16)
+legend(EAWAG.3d$xyz.convert(0.8, 0.2, 0.2), legend = c("Initial","2021","2022"),
+        pch = c(19,11,15))
+dev.off()
+```
