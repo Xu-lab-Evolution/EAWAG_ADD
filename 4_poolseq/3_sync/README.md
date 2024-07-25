@@ -46,4 +46,8 @@ parallel -j $NTHREADS processSYNC ::: "${chrArray[@]}"
 cd $OUTDIR/sync
 
 cat *.sync > daphnia.sync
+
+#convert nucleotides with small caps in capital letters and remove 'N's
+awk 'BEGIN { OFS = "\t" } { $3 = toupper($3); print }' daphnia.sync |
+awk '$3 == "N" { next } { print }' > daphnia2.sync 
 ```
