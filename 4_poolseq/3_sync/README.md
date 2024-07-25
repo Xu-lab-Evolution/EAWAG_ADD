@@ -27,7 +27,7 @@ find $DATADIR -type f -name "*.bam" -printf "%p\n" | sort > $OUTDIR/filelist.txt
 function processSYNC {
 chr=$1
 chrNEW=$(echo ${chr} | sed s/"D_magna_"//)
-PRJDIR=######### ADD PATH TO PROJECT DIRECTORY HERE =#########
+PRJDIR=######### ADD PATH TO PROJECT DIRECTORY HERE #########
 REFDIR=$PRJDIR/reference_genome
 OUTDIR1=$PRJDIR/4_mpileup_sync/mpileup
 OUTDIR2=$PRJDIR/4_mpileup_sync/sync
