@@ -38,7 +38,6 @@ snpfilter <- read.table("data/snplist.txt", header = F)
 freq.df <- data.sub.long.rescale
 freq.df <- freq.df %>% filter(SNP %in% snpfilter$V1)
 snp.list <- unique(freq.df$SNP)
-#snp.list <- sample(snp.list, 100)
 freq.df <- freq.df %>% filter(SNP %in% snp.list)
 
 freq.df$Year[freq.df$Year == "Initial"] <- 0
