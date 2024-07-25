@@ -19,7 +19,7 @@ DATADIR=$PRJDIR/3_bwa/mapped
 REFDIR=$PRJDIR/reference_genome
 OUTDIR=$PRJDIR/4_mpileup_sync
 POPOOLATION2=$OUTDIR/popoolation2_1201
-
+NTHREADS=12
 cd $OUTDIR
 
 find $DATADIR -type f -name "*.bam" -printf "%p\n" | sort > $OUTDIR/filelist.txt
@@ -41,7 +41,7 @@ rm $OUTDIR1/daphnia.${chr}.mpileup
 export -f processSYNC
 
 chrArray=("D_magna_CH1_L" "D_magna_CH1_R" "D_magna_CH2_L" "D_magna_CH2_R" "D_magna_CH3_L" "D_magna_CH3_R" "D_magna_CH4_L" "D_magna_CH4_R" "D_magna_CH5_L" "D_magna_CH5_R" "D_magna_CH6" "D_magna_CH7_L" "D_magna_CH7_R" "D_magna_CH8_L" "D_magna_CH8_R" "D_magna_CH10_L" "D_magna_CH10_R" "D_magna_CH9_R" "D_magna_CH9_L")
-parallel -j 12 processSYNC ::: "${chrArray[@]}"
+parallel -j $NTHREADS processSYNC ::: "${chrArray[@]}"
 
 cd $OUTDIR/sync
 
