@@ -1,4 +1,10 @@
-# Code
+### Data availability
+
+Raw data is available at NCBI SRA under the BioProject number PRJNA849360.
+
+Steps 1-4 and 6 are **very** computationally intensive, so in the folder `0_data` here we provide all the inputs to reproduce graphs and analyses.
+
+### Code
 
 **1.** [organize data](/4_poolseq/1_organize)
 
@@ -11,6 +17,10 @@
 **5.** [calculate Fst](/4_poolseq/5_fst)
 
 **6.** [run CLEAR](/4_poolseq/6_clear)
+
+
+
+
 
 **7.** [run GLMM](/4_poolseq/7_glmm)
 
