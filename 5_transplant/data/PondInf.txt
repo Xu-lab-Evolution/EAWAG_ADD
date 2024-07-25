@@ -1,0 +1,17 @@
+Pond	Treatment
+1A	Aphid
+1B	Control
+1C	Control
+1D	Aphid
+2A	Control
+2B	Aphid
+2C	Aphid
+2D	Control
+3A	Aphid
+3B	Control
+3C	Control
+3D	Aphid
+6A	Control
+6B	Aphid
+6C	Aphid
+6D	Control
