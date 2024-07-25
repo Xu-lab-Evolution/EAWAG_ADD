@@ -1,6 +1,6 @@
 ### Data availability
 
-Raw data is available at NCBI SRA under the BioProject number PRJNA849360.
+Raw data is available at NCBI SRA under the BioProject number `PRJNA849360`.
 
 ### Data processing
 
