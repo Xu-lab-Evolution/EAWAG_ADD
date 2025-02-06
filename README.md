@@ -8,6 +8,7 @@ Indirect ecological interactions are thought to be ubiquitous in nature and may 
 # Disclaimer
 
 This repository contains the main components used to process the raw data and to analyze it. Raw data is available at NCBI SRA under the BioProject number `PRJNA849360`.
+The r-marddown file can also be found in this folder.
 
 # Code
 
