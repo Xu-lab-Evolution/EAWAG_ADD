@@ -1,6 +1,6 @@
 ```{r load function and packages}
-#setwd("~/Xu's lab Dropbox/Shuqing Xu/Mystuff/Collaborations/EAWAG");
-setwd("~/Documents/Xdrive/Seafile/XDrive/Projects/EAWAG/")
+
+setwd("./")
 
 # List of packages for session
 .packages = c("ggplot2", "plyr", "data.table","EnvStats","tibble","tidyr","qqman","stringr",
