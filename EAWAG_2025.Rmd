@@ -1,0 +1,1511 @@
+---
+title: "R-scripts4Schaefer et al. 2024"
+output: html_document
+date: "2024-06-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load packages and functions
+
+
+```{r load function and packages}
+#setwd("~/Xu's lab Dropbox/Shuqing Xu/Mystuff/Collaborations/EAWAG");
+setwd("~/Documents/Xdrive/Seafile/XDrive/Projects/EAWAG/")
+
+# List of packages for session
+.packages = c("ggplot2", "plyr", "data.table","EnvStats","tibble","tidyr","qqman","stringr",
+              "vcfR","poolfstat","aod","glmmTMB","scatterplot3d","lme4",
+             "tidyverse","CMplot","tidyr","broom.mixed","parallel","hrbrthemes","reshape2",
+             "multcomp",   "emmeans","devtools","clusterProfiler","ontologyIndex","vegan","car","gridExtra","pcadapt","ComplexHeatmap","pheatmap","dendextend","tidyHeatmap",  "lmerTest")
+
+
+# Install CRAN packages (if not already installed)
+.inst <- .packages %in% installed.packages()
+if(length(.packages[!.inst]) > 0) BiocManager::install(.packages[!.inst],update = T,ask = F)
+
+# Load packages into session 
+lapply(.packages, require, character.only=TRUE)
+
+# load required funcitons.
+
+AphidEffects <- function(data, 
+                         Treatment = NULL, 
+                         Pond = NULL, 
+                         Block = NULL, 
+                         Time = NULL, 
+                         Year = NULL, 
+                         Week = NULL, 
+                         TimeRemove = NULL, 
+                         logTransform = TRUE, 
+                         Parameters = "Unknown") {
+  # Create results folder if it doesn't exist
+  if (!dir.exists("results")) {
+    dir.create("results")
+  }
+  
+  ##########################################
+  # Helper: summarySE function
+  ##########################################
+  summarySE <- function(data, measurevar, groupvars, na.rm = TRUE,
+                        conf.interval = 0.95, .drop = TRUE) {
+    # Function to calculate count, mean, sd, se, and confidence interval.
+    length2 <- function(x, na.rm = FALSE) {
+      if (na.rm) sum(!is.na(x)) else length(x)
+    }
+    datac <- ddply(data, groupvars, .drop = .drop,
+                   .fun = function(xx, col, na.rm) {
+                     c(N = length2(xx[, col], na.rm = na.rm),
+                       mean = mean(xx[, col], na.rm = na.rm),
+                       sd = sd(xx[, col], na.rm = na.rm),
+                       sum = sum(xx[, col], na.rm = na.rm))
+                   },
+                   measurevar, na.rm)
+    datac$se <- datac$sd / sqrt(datac$N)  # Standard error
+    ciMult <- qt(conf.interval / 2 + 0.5, datac$N - 1)
+    datac$ci <- datac$se * ciMult
+    return(datac)
+  }
+  
+  ##########################################
+  # Helper: run_model to fit model and report stats
+  ##########################################
+  run_model <- function(data_tmp, TimeRemove, response_label) {
+    # Set lmer control options
+    ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+    
+    # Subset data based on TimeRemove if provided
+    if (!is.null(TimeRemove)) {
+      data_sub <- data_tmp[data_tmp$Time > TimeRemove, ]
+    } else {
+      data_sub <- data_tmp
+    }
+    data_sub$Week <- as.numeric(data_sub$Week)
+    data_sub$Year <- factor(data_sub$Year, ordered = TRUE)
+    
+    # Fit the model
+    model <- lmer(Response ~ Treatment * Year + poly(Week, 2) + (Time | Pond),
+                  data = data_sub, REML = TRUE, control = ctrl)
+    
+    # Extract ANOVA table with denominator degrees of freedom
+    anova_table <- anova(model)
+    
+    # Initialize storage for effects and calculate partial eta squared
+    effects <- rownames(anova_table)
+    effect_size <- rep(NA, nrow(anova_table))
+    
+    for (i in 1:nrow(anova_table)) {
+      Fval <- anova_table$`F value`[i]
+      df_effect <- anova_table$NumDF[i]
+      df_error <- anova_table$DenDF[i]
+      if (!is.na(Fval) && Fval > 0 && !is.na(df_error) && (Fval * df_effect + df_error) != 0) {
+        effect_size[i] <- (Fval * df_effect) / (Fval * df_effect + df_error)
+      } else {
+        effect_size[i] <- NA
+      }
+    }
+    
+    # Combine into summary table
+    result_table <- data.frame(
+      Effect = effects,
+      NumDF = anova_table$NumDF,
+      DenDF = anova_table$DenDF,
+      F_value = anova_table$`F value`,
+      p_value = anova_table$`Pr(>F)`,
+      Partial_Eta_Squared = effect_size,
+      row.names = NULL
+    )
+    
+    # Round numeric columns to two digits, except for p_value
+    num_cols <- sapply(result_table, is.numeric)
+    for (col in names(result_table)[num_cols]) {
+      if (col != "p_value") {
+        result_table[[col]] <- round(result_table[[col]], 2)
+      }
+    }
+    # Format p_value column to preserve scientific notation
+    result_table$p_value <- sapply(result_table$p_value, function(x) {
+      if (is.na(x)) return(NA)
+      format(x, scientific = TRUE, digits = 2)
+    })
+    
+    return(list(model = model, stats = result_table))
+  }
+  
+  ##########################################
+  # Helper: makePlot to generate and save plot
+  ##########################################
+  makePlot <- function(data_tmp, stats_table, Resp_name) {
+    # Convert Block and Year to factors
+    data_tmp$Block <- as.factor(data_tmp$Block)
+    data_tmp$Year <- as.factor(data_tmp$Year)
+    
+    # Build a title that reports the Treatment effect statistics (if available)
+    treat_row <- stats_table[grep("Treatment", stats_table$Effect), ]
+    if (nrow(treat_row) > 0) {
+       title <- sprintf("%s: Treatment effect: F(%d, %d) = %.2f, p = %s", 
+                 Resp_name, 
+                 as.integer(treat_row$NumDF[1]), 
+                 as.integer(treat_row$DenDF[1]), 
+                 treat_row$F_value[1], 
+                 formatC(as.numeric(treat_row$p_value[1]), format = "e", digits = 2))
+    } else {
+      title <- Resp_name
+    }
+    
+    # Summarize data for plotting
+    data_sum <- summarySE(data = data_tmp, groupvars = c("Time", "Treatment"), measurevar = "Response")
+    
+    # Create plot
+    p <- ggplot(data = data_sum, aes(x = Time, y = mean, colour = Treatment, shape = Treatment, group = Treatment)) +
+      geom_errorbar(aes(ymin = mean, ymax = mean + se), width = 0, position = position_dodge(0.05)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 4) +
+      ggtitle(title) +
+      labs(x = "Calendar Week") +
+      xlim(min(data_tmp$Time, na.rm = TRUE) - 1, max(data_tmp$Time, na.rm = TRUE) + 1) +
+      theme_classic() +
+      scale_color_manual(values = c('darkred', '#56B4E9'))
+    
+    # Determine file name based on Resp_name (remove extension if necessary) and save in the results folder
+    file_name <- ifelse(grepl("\\.", Resp_name),
+                        paste0("results/", str_split(Resp_name, "\\.", n = 2)[[1]][1], ".pdf"),
+                        paste0("results/", Resp_name, ".pdf"))
+    
+    ggsave(filename = file_name, plot = p, width = 8, height = 6)
+    return(p)
+  }
+  
+  ##########################################
+  # Main analysis
+  ##########################################
+  if (is.null(ncol(data))) { 
+    # When data is a vector (single response)
+    Resp_name <- Parameters
+    data_tmp <- data.frame(Response = as.numeric(as.character(data)), 
+                           Treatment = Treatment, 
+                           Block = Block, 
+                           Week = Week, 
+                           Year = Year, 
+                           Pond = Pond, 
+                           Time = Time)
+    data_tmp <- na.omit(data_tmp)
+    
+    analysis <- run_model(data_tmp, TimeRemove, response_label = Resp_name)
+    p <- makePlot(data_tmp, analysis$stats, Resp_name)
+    
+    # Print the statistical table
+    print(analysis$stats)
+    
+  } else {
+    # When data is a data.frame with multiple response columns
+    for (i in 1:ncol(data)) {
+      Resp_name <- colnames(data)[i]
+      # Remove NA values for the response variable
+      check_na <- is.na(data[, Resp_name])
+      data_sub <- if (any(check_na)) data[!check_na, ] else data
+      
+      # Only proceed if there is variation in the response
+      if (max(data_sub[, Resp_name], na.rm = TRUE) != min(data_sub[, Resp_name], na.rm = TRUE)) {
+        if (logTransform) {
+          data_tmp <- data.frame(
+            Response = log10(as.numeric(as.character(data_sub[, Resp_name])) + 1),
+            Treatment = Treatment[!check_na],
+            Pond = Pond[!check_na],
+            Time = Time[!check_na],
+            Block = Block[!check_na],
+            Year = Year[!check_na],
+            Week = Week[!check_na]
+          )
+        } else {
+          data_tmp <- data.frame(
+            Response = as.numeric(as.character(data_sub[, Resp_name])),
+            Treatment = Treatment[!check_na],
+            Pond = Pond[!check_na],
+            Time = Time[!check_na],
+            Block = Block[!check_na],
+            Year = Year[!check_na],
+            Week = Week[!check_na]
+          )
+        }
+        data_tmp <- na.omit(data_tmp)
+        
+        analysis <- run_model(data_tmp, TimeRemove, response_label = Resp_name)
+        p <- makePlot(data_tmp, analysis$stats, Resp_name)
+        
+        # Print the statistical table for this response
+        print(analysis$stats)
+      }
+    }
+  }
+}
+
+
+
+  
+summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=T,
+                        conf.interval=.95, .drop=TRUE) {
+    require(plyr)
+    
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+      if (na.rm) sum(!is.na(x))
+      else       length(x)
+    }
+    
+    # This is does the summary; it's not easy to understand...
+    datac <- ddply(data, groupvars, .drop=.drop,
+                   .fun= function(xx, col, na.rm) {
+                     c( N    = length2(xx[,col], na.rm=na.rm),
+                        mean = mean   (xx[,col], na.rm=na.rm),
+                        sd   = sd     (xx[,col], na.rm=na.rm),
+                        sum  = sum     (xx[,col], na.rm=na.rm)
+                     )
+                   },
+                   measurevar,
+                   na.rm
+    )
+    
+    # Rename the "mean" column
+    # datac <- rename(datac, c("mean"=measurevar))
+    
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+    
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval:
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+    
+    return(datac)
+  }
+
+
+```
+
+## set working directory and load the data
+
+
+```{r Load monitoring data, echo=T}
+
+## read all data into one excell sheet;
+
+Data.all<- sapply(readxl::excel_sheets("./data/ADD-Monitoring_v2.xlsx"), simplify = F, USE.NAMES = F,
+                  function(X) readxl::read_excel("./data/ADD-Monitoring_v2.xlsx", sheet = X))
+PondInfo<-read.table(file="./data/PondInf.txt",sep="\t", header=T,row.names=1);
+## 26 data sheet
+head(Data.all)
+  ADD.Monitor<-data.frame();
+# read all data, except the phytoplantkon data (in a different format).
+for(i in 1 :(length(Data.all)-1)){
+  data.tmp<-data.frame(Data.all[i]);
+  colnames(data.tmp)<-data.tmp[1,];
+  data.tmp<-data.tmp[-1,];
+  colnames(data.tmp)[1]<-"Pond";
+  data.tmp<-melt(data.tmp, id=c("Pond"));  
+  colnames(data.tmp)<-c("Pond","Time",colnames(data.frame(Data.all[i]))[1]);
+  data.tmp$Time<-as.numeric(as.character( data.tmp$Time))
+  if(nrow(ADD.Monitor)==0){
+    ADD.Monitor<-data.tmp;
+  }else{
+    ADD.Monitor<-merge(ADD.Monitor,data.tmp,by.x=c("Pond","Time"),by.y=c("Pond","Time"),all.x = TRUE, all.y = TRUE);
+  }
+}
+
+dim(ADD.Monitor)
+head(ADD.Monitor)
+
+# merge the data with phytoplankton
+phytoplanton<-data.frame(Data.all[length(Data.all)]);
+phytoplanton$Time<-as.numeric(phytoplanton$Week);
+head(phytoplanton)
+phytoplanton<-phytoplanton[,-c(4,5)];
+phytoplanton$SimpsonDiv<-diversity(log(phytoplanton[,c(5:16)]+1),index = "simpson");
+
+
+ADD.Monitor.all<-merge(ADD.Monitor,phytoplanton,by.x=c("Pond","Time"),by.y=c("Pond","Time"),all.x = TRUE, all.y = TRUE);
+ADD.Monitor.all$Treatment<-PondInfo[ADD.Monitor.all$Pond,"Treatment"];
+
+
+# removed the data from pond 6A, because snails were not established in this pond.
+ADD.Monitor.all<-ADD.Monitor.all[!ADD.Monitor.all$Pond=="6A",]
+
+# for statistical analysis, we removed the data from the first two weeks (as aphid population remained very low) and the data after 73th week (when the last sample from Daphnia was taken). Duckweed coverage was monitored for a longer time.
+
+ADD.Monitor.all.sub<-ADD.Monitor.all[ADD.Monitor.all$Time<=73,];
+Block<-substr(ADD.Monitor.all.sub$Pond,start = 1,stop = 1)
+
+ADD.Monitor.all.sub$Year=ifelse((ADD.Monitor.all.sub$Time>=27),2022,2021);
+ADD.Monitor.all.sub$Week=ifelse((ADD.Monitor.all.sub$Year==2021),ADD.Monitor.all.sub$Time+25,ADD.Monitor.all.sub$Time+25-52);
+
+MW_NH4 <- 18.04   # ammonium
+MW_PO4 <- 94.97   # phosphate
+
+#ADD.Monitor.all.sub$Time
+#head(ADD.Monitor.all)
+
+#is.numeric(ADD.Monitor.all.sub$Time)
+```
+
+## create plots for Figure 1 and Figure S2, S13 and S14 and perform statistical analysis
+
+```{r run statistics , echo=T}
+
+# Clear the results table each time you run if you want a fresh table
+
+results_table <- data.frame(
+  Response     = character(),
+  Explanatory  = character(),
+  NumDF           = numeric(),
+  DenDF           = numeric(),
+  F_value      = numeric(),
+  P_value      = numeric(),
+  Effect_size  = numeric(),
+  stringsAsFactors = FALSE
+)
+
+ADD.Monitor.all.sub<-ADD.Monitor.all.sub %>%
+  mutate(LightIntensity=log(as.numeric(Light_weekly_average))) %>%
+  mutate(temperature=as.numeric(Temp...C._weekly.average_HOBO.Logger)) %>% 
+  mutate(ChlA=as.numeric(ChlA..µg.L.))%>%
+  mutate(O2=as.numeric(O2..mg.L.)) %>%
+  mutate(Chlorophyta=log(as.numeric(Chlorophyta..cells.l.)+1)) %>%
+  mutate(Bacillariophyceae=log(as.numeric(Bacillariophyceae..cells.l.)+1))%>%
+  mutate(Streptophyta=log(as.numeric(Streptophyta..cells.l.)+1))%>%
+  mutate(dmagna=log(as.numeric(TotalDaphina_magna)+1))%>%
+  mutate(ammonium=as.numeric(Ammonium..µg.L.)) %>%
+  mutate(phosphate=as.numeric(Phosphat..µg.L.))%>%
+  mutate(TotalCarbon=as.numeric(TotalerC..mg.L.)) %>%
+  mutate(Cyanobacteria=log(as.numeric(Cyanobacteria..cells.l.)+1)) %>%
+  filter(!is.na(ammonium)) %>%
+  mutate(NPratio=ammonium * MW_PO4 /(phosphate * MW_NH4)) 
+    
+
+colnames(ADD.Monitor.all.sub)
+col.export<-c("Pond", "Time",	"Year",	"Week",	"Treatment","AphidDensity",	"DuckweedCoverage",
+              "ammonium","phosphate","LightIntensity","temperature",
+              "chlA","rotifer","dmagna","cyanobacteria")
+
+write.table(ADD.Monitor.all.sub[,col.export], file="./data/environment.txt",sep="\t", quote = F,row.names = F)
+  
+  ## remove the data point when temperature is below 15 degrees, as no duckweed and aphids.
+
+# List of variables to be analyzed
+
+Phytoplankton <- c(  "Chlorophyta",
+                     "Bacillariophyceae",
+                     "Streptophyta",
+                     "Cyanobacteria","SimpsonDiv","ChlA")
+
+ADD<-c("AphidDensity","DuckweedCoverage" )
+
+AbioticFactor<-c("ammonium",
+                     "phosphate",
+                     "TotalCarbon",
+                     "temperature",
+                     "O2..mg.L.",
+                     "pH","LightIntensity","NPratio")
+
+# Loop through each variable and store the returned row in results_table
+# for abiotic responses and D. magna, remove the first 7 data points from statistical analysis,when duckweed population started showing differences.
+colnames(ADD.Monitor.all.sub)
+for (var_name in c(ADD,AbioticFactor,"dmagna")) {
+  # Extract the numeric data
+  response_vec <- as.numeric(ADD.Monitor.all.sub[[var_name]])
+  # Call the function
+  res_row <- AphidEffects(data = response_vec,
+                          Treatment = ADD.Monitor.all.sub$Treatment,
+                          Pond = ADD.Monitor.all.sub$Pond,
+                          Block = substr(ADD.Monitor.all.sub$Pond,1,1),
+                          Time = ADD.Monitor.all.sub$Time,
+                          Week = ADD.Monitor.all.sub$Week,
+                          Year = ADD.Monitor.all.sub$Year,
+                          TimeRemove = 7, #exclude the data from the firs 7 weeks from statistical analysis, when duckweed showed different population size.
+                          Parameters = var_name)
+  res_row$Response<-var_name;
+  # Append to our results table
+  results_table <- rbind(results_table, res_row)
+}
+
+# for phytoplankton, remove the first 2 data points from statistics, as the response is quick.
+for (var_name in c(Phytoplankton)) {
+  # Extract the numeric data
+  response_vec <- as.numeric(ADD.Monitor.all.sub[[var_name]])
+  # Call the function
+  res_row <- AphidEffects(data = response_vec,
+                          Treatment = ADD.Monitor.all.sub$Treatment,
+                          Pond = ADD.Monitor.all.sub$Pond,
+                          Block = substr(ADD.Monitor.all.sub$Pond,1,1),
+                          Time = ADD.Monitor.all.sub$Time,
+                          Week = ADD.Monitor.all.sub$Week,
+                          Year = ADD.Monitor.all.sub$Year,
+                          TimeRemove = 2, #exclude the data from the firs 7 weeks from statistical analysis, when duckweed showed different population size.
+                          Parameters = var_name)
+  res_row$Response<-var_name;
+  # Append to our results table
+  results_table <- rbind(results_table, res_row)
+}
+
+
+write.table(results_table,file="AphidEffect.txt",sep="\t",quote = F,col.names =T)
+
+
+
+# Inspect the final table
+print(results_table)
+#ADD.Monitor.all.sub$Time<-factor(ADD.Monitor.all.sub$Time, ordered = T)
+
+## analyse the N:P ratio
+ADD.Monitor.all.sub.clean<-ADD.Monitor.all.sub %>%
+  mutate(Phosphate=as.numeric(Phosphat..µg.L.)) %>%
+  filter(!is.na(Phosphate)) %>%
+  mutate(ammonium=as.numeric(Ammonium..µg.L.)) %>%
+  filter(!is.na(ammonium)) 
+
+ADD.Monitor.all.sub.clean$NP_ratio=as.numeric(ADD.Monitor.all.sub.clean$ammonium) * MW_PO4 /(as.numeric(ADD.Monitor.all.sub.clean$Phosphate) * MW_NH4)
+
+ADD.Monitor.all.sub.clean$N_MC<-14*as.numeric(ADD.Monitor.all.sub.clean$ammonium)/MW_NH4
+ADD.Monitor.all.sub.clean$P_MC<-31*as.numeric(ADD.Monitor.all.sub.clean$Phosphate)/MW_PO4
+Block<-substr(ADD.Monitor.all.sub.clean$Pond,start = 1,stop = 1)
+
+ADD.Monitor.all.sub.clean[ADD.Monitor.all.sub.clean$Time=="57",c("Treatment","NP_ratio")]
+
+AphidEffects(data=(log(ADD.Monitor.all.sub.clean$NP_ratio)),Block,Pond=ADD.Monitor.all.sub.clean$Pond,Time =  ADD.Monitor.all.sub.clean$Time,Week=ADD.Monitor.all.sub.clean$Week, Year=ADD.Monitor.all.sub.clean$Year, Treatment = ADD.Monitor.all.sub.clean$Treatment,TimeRemove = 2,Parameters  = "NP_ratio")
+
+AphidEffects(data=((ADD.Monitor.all.sub.clean$N_MC)),Block,Pond=ADD.Monitor.all.sub.clean$Pond,Time =  ADD.Monitor.all.sub.clean$Time,Week=ADD.Monitor.all.sub.clean$Week, Year=ADD.Monitor.all.sub.clean$Year, Treatment = ADD.Monitor.all.sub.clean$Treatment,TimeRemove = 2,Parameters  = "N_MC")
+
+
+ADD.Monitor.all.sub.clean[ADD.Monitor.all.sub.clean$Time>=40,c("Week","NP_ratio","Pond","Treatment")]
+
+
+## analyze the changes of phytoplankoton between week 30 and 34 in 2021.
+ADD.Monitor.all.sub.kw30<-ADD.Monitor.all.sub %>%
+  filter(Year=="2021") %>%
+  filter(Week>=30 &Week <=34)
+ colnames(ADD.Monitor.all.sub.kw30)
+ var_name<-"temperature"
+ response_vec <- as.numeric(ADD.Monitor.all.sub.kw30[[var_name]])
+  # Call the function
+  data.tmp<-data.frame(Response=response_vec,
+                       Treatment = ADD.Monitor.all.sub.kw30$Treatment,
+                          Pond = ADD.Monitor.all.sub.kw30$Pond,
+                          Block = substr(ADD.Monitor.all.sub.kw30$Pond,1,1),
+                          Time = ADD.Monitor.all.sub.kw30$Time,
+                          Week = ADD.Monitor.all.sub.kw30$Week,
+                          Year = ADD.Monitor.all.sub.kw30$Year)
+      ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+
+    model <- lmer(Response ~ Treatment  +  (Time | Pond),
+                  data = data.tmp, REML = TRUE, control = ctrl)
+anova(model)
+
+## calculate the average changes of abiotic factors in 2022
+#ADD.Monitor.all.sub$Week
+ADD.Monitor.all.sub.clean.2022<-ADD.Monitor.all.sub %>%
+  filter(Year==2022) %>%
+  filter(Week>30) %>%
+  mutate(TotalCarbon=as.numeric(TotalerC..mg.L.)) %>%
+  mutate(Temperature=as.numeric(Temp...C._weekly.average_HOBO.Logger)) %>%
+  mutate(pH=as.numeric(pH)) %>%
+  mutate(Phosphate=as.numeric(Phosphat..µg.L.)) %>%
+  mutate(ammonium=as.numeric(Ammonium..µg.L.)) 
+
+ADD.Monitor.all.sub.clean.2022$LightIntensity
+summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "ammonium",groupvars = "Treatment")[1,3]/summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "ammonium",groupvars = "Treatment")[2,3] -1
+
+summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "Phosphate",groupvars = "Treatment")[1,3]/summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "Phosphate",groupvars = "Treatment")[2,3] -1
+
+summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "TotalCarbon",groupvars = "Treatment")[1,3]/summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "TotalCarbon",groupvars = "Treatment")[2,3] -1
+
+summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "LightIntensity",groupvars = "Treatment")[1,3]/summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "LightIntensity",groupvars = "Treatment")[2,3] -1
+summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "pH",groupvars = "Treatment")[1,3] - summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "pH",groupvars = "Treatment")[2,3] 
+
+
+```
+
+## Analyze resistotype data and create Figure 2
+
+```{r Load resistotype data, echo=T}
+
+dat1a <-read.csv("./data/resistotypes_binary.csv")
+treat <-read.csv("./data/treatments.csv")
+
+names(dat1a)
+names(treat)
+
+dat1a$host_group <- substring(dat1a$host,1,10)
+dat1a$host_group2 <- substring(dat1a$host,1,11)
+
+dat1a$group <- "unknown"
+dat1a$group <-  ifelse(dat1a$host_group == "CH-H-2014-", "Swisspondpanel",
+                 ifelse(dat1a$host_group == "CH-H-2016-", "Swisspondpanel",      
+                  ifelse(dat1a$host_group == "CH-H-2019-", "Swisspondpanel", 
+                   ifelse(dat1a$host_group == "CH-H-EEE0-", "EEE_start",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-1A", "EEE_1A",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-1B", "EEE_1B",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-1C", "EEE_1C",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-1D", "EEE_1D",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-2A", "EEE_2A",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-2B", "EEE_2B",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-2C", "EEE_2C",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-2D", "EEE_2D",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-3A", "EEE_3A",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-3B", "EEE_3B",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-3C", "EEE_3C",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-3D", "EEE_3D",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-6A", "EEE_6A",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-6B", "EEE_6B",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-6C", "EEE_6C",
+                          ifelse(dat1a$host_group2 == "CH-H-EEE-6D", "EEE_6D", 
+                                 "unknow2"))))))))))))))))))))
+     
+table(dat1a$group, exclude=NULL)                                                        
+table(treat$group, exclude=NULL)                                                        
+
+dat1 <- merge(dat1a, treat, by="group")
+
+
+dat1$host_group <- NULL
+dat1$host_group2 <- NULL
+#head(dat1)
+
+# produce binomial variables (replace R and S with 0 and 1).
+
+dat1$C1_b <- ifelse(dat1$C1 == "R", 0,
+                    ifelse(dat1$C1 == "S", 1, 
+                           ifelse(is.na(dat1$C1), NA, NA)))
+dat1$C19_b <- ifelse(dat1$C19 == "R", 0,
+                    ifelse(dat1$C19 == "S", 1, 
+                           ifelse(is.na(dat1$C19), NA, NA)))
+dat1$P15_b <- ifelse(dat1$P15 == "R", 0,
+                    ifelse(dat1$P15 == "S", 1, 
+                           ifelse(is.na(dat1$P15), NA, NA)))
+dat1$P20_b <- ifelse(dat1$P20 == "R", 0,
+                    ifelse(dat1$P20 == "S", 1, 
+                           ifelse(is.na(dat1$P20), NA, NA)))
+dat1$P21_b <- ifelse(dat1$P21 == "R", 0,
+                    ifelse(dat1$P21 == "S", 1, 
+                           ifelse(is.na(dat1$P21), NA, NA)))
+
+dat1$P38_b <- ifelse(dat1$P38 == "R", 0,
+                     ifelse(dat1$P38 == "S", 1, 
+                            ifelse(is.na(dat1$P38), NA, NA)))
+
+dat1$P50_b <- ifelse(dat1$P50 == "R", 0,
+                     ifelse(dat1$P50 == "S", 1, 
+                            ifelse(is.na(dat1$P50), NA, NA)))
+dat1$P54_b <- ifelse(dat1$P54 == "R", 0,
+                     ifelse(dat1$P54 == "S", 1, 
+                            ifelse(is.na(dat1$P54), NA, NA)))
+
+
+# Summarize data and make graphics
+
+names(dat1)
+table(dat1$aphid, dat1$EEE_sample)
+dat2 = subset(dat1, select = c(EEE_sample, group, aphid, C1_b, C19_b, P15_b, P20_b, P21_b, 
+                               P38_b, P50_b, P54_b))
+
+aggdata <-aggregate(dat2, by=list(dat2$aphid, dat2$EEE_sample, dat2$group), FUN=mean, na.rm=TRUE)
+names(aggdata)
+aggdata$aphid <- aggdata$Group.1
+aggdata$EEE_sample <- aggdata$Group.2
+aggdata$group <- aggdata$Group.3
+aggdata$Group.1 <- NULL
+aggdata$Group.2 <- NULL
+aggdata$Group.3 <- NULL
+aggdata$block <- NULL
+
+aggdata$time_treat <- paste(aggdata$EEE_sample, aggdata$aphid)
+print(aggdata) 
+
+table(aggdata$time_treat)
+aggdata$time_treat<-factor(aggdata$time_treat,levels=c("2021/6 zero", "2021/10 no", "2021/10 yes",
+                                                      "2022/7 no", "2022/7 yes" ), ordered=T)
+
+p1 <- ggplot(aggdata, aes(x=time_treat, y=C1_b)) + 
+  geom_bar(position = 'dodge', fun="mean", stat = 'summary', fill = c('yellow','#56B4E9','darkred','#56B4E9','darkred')) +
+  ylim(0,1) +
+  geom_errorbar(stat = 'summary', position = 'dodge', width = 0) +
+  geom_point(shape=16,col="grey") +
+  theme_minimal() +
+  ggtitle("P. ramosa C1") + 
+  theme(text = element_text(size = 8)) +
+  labs(x = "Treatment", y ="Parasite attachment")
+
+
+p2 <- ggplot(aggdata, aes(x=time_treat, y=C19_b)) + 
+  geom_bar(position = 'dodge', fun="mean", stat = 'summary', fill=c('yellow','#56B4E9','darkred','#56B4E9','darkred')) +
+  ylim(0,1) +
+  geom_errorbar(stat = 'summary', position = 'dodge', width = 0) +
+  geom_point(shape=16,col="grey") +
+  theme_minimal() +
+  ggtitle("P. ramosa C19") + 
+  theme(text = element_text(size = 8)) +
+   labs(x = "Treatment", y ="Parasite attachment")
+
+p3 <- ggplot(aggdata, aes(x=time_treat, y=P15_b)) + 
+  geom_bar(position = 'dodge', fun="mean", stat = 'summary', fill = c('yellow','#56B4E9','darkred','#56B4E9','darkred')) +
+  ylim(0,1) +
+  geom_errorbar(stat = 'summary', position = 'dodge', width = 0) +
+  geom_point(shape=16,col="grey") +
+  theme_minimal() +
+  ggtitle("P. ramosa P15") + 
+  theme(text = element_text(size = 8)) +
+   labs(x = "Treatment", y ="Parasite attachment")
+
+
+p4 <- ggplot(aggdata, aes(x=time_treat, y=P20_b)) + 
+  geom_bar(position = 'dodge', fun="mean", stat = 'summary', fill = c('yellow','#56B4E9','darkred','#56B4E9','darkred')) +
+  ylim(0,1) +
+  geom_errorbar(stat = 'summary', position = 'dodge', width = 0) +
+  geom_point(shape=16,col="grey") +
+  theme_minimal() +
+  ggtitle("P. ramosa P20") + 
+  theme(text = element_text(size = 8)) +
+  labs(x = "Treatment", y ="Parasite attachment")
+
+
+p5 <- ggplot(aggdata, aes(x=time_treat, y=P21_b)) + 
+  geom_bar(position = 'dodge', fun="mean", stat = 'summary', fill=c('yellow','#56B4E9','darkred','#56B4E9','darkred')) +
+  ylim(0,1) +
+  geom_errorbar(stat = 'summary', position = 'dodge', width = 0) +
+  geom_point(shape=16,col="grey") +
+  theme_minimal() +
+  ggtitle("P. ramosa P21") + 
+  theme(text = element_text(size = 8)) +
+   labs(x = "Treatment", y ="Parasite attachment")
+
+
+p.all<-grid.arrange(p1, p2, p3,p4, p5, ncol = 5, nrow =1)
+ggsave(file="./Results/Figure2.pdf",p.all)
+
+
+
+##################################################################
+# statistical analysis using GLM;
+# binomial regression
+
+dat_time1 <- dat1[(!dat1$EEE_sample=="2021/6"),]
+head(dat_time1)
+
+mod_C1  <- glmer(C1_b ~ aphid + (1+EEE_sample|block), 
+                data=dat_time1, family=binomial(link = "logit"))
+summary(mod_C1)
+
+
+
+mod_C19  <- glmer(C19_b ~ aphid + (1+EEE_sample|pond_id), 
+                 data=dat_time1, family=binomial(link = "logit"))
+
+summary(mod_C19)
+
+mod_P15  <- glmer(P15_b ~ aphid  + (1+EEE_sample|pond_id), 
+                  data=dat_time1, family=binomial(link = "logit"))
+summary(mod_P15)
+
+mod_P20  <- glmer(P20_b ~ aphid  + (1+EEE_sample|pond_id), 
+                  data=dat_time1, family=binomial(link = "logit"))
+
+summary(mod_P20)
+
+mod_P21  <- glmer(P21_b ~ aphid  + (1+EEE_sample|pond_id), 
+                  data=dat_time1, family=binomial(link = "logit"))
+
+
+summary(mod_P21)
+
+
+#############################################################
+
+
+
+```
+
+
+## Analzye population genomics data and create figrue 3, S15, S16
+
+```{r Load genomic data, echo=F}
+
+## create the Manhattan plot based on the GLM model results. Fig 2
+
+a1 <- readRDS("data/glmmTMB.rds")
+a1 <- a1 %>% separate_wider_delim(cols = snp, delim = ".", names = c("chr", "pos"), too_few = "debug")
+a1 <- a1 %>% drop_na() %>% select(chr, pos, p.value)
+colnames(a1) <- c("chr", "pos", "p")
+a1$pos <- as.numeric(a1$pos)
+a1$p <- as.numeric(a1$p)
+prep.data.plot <- function(df){
+  data_cum <- df %>%
+    group_by(chr) %>%
+    summarise(max_bp = max(pos)) %>%
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>%
+    select(chr, bp_add)
+  gwas_data <- df %>%
+    inner_join(data_cum, by = "chr") %>%
+    mutate(bp_cum = pos + bp_add)
+  return(gwas_data)
+}
+
+
+lm.plot <- prep.data.plot(a1) %>% filter(-log10(p) < 30)
+sig.snps <- lm.plot %>% filter(p < 0.05/nrow(lm.plot))
+
+lm.plot %>% filter(p < 0.05/nrow(lm.plot) & -log10(p) < 30) %>% write.csv("./Results/sig_lm.txt")
+
+plot.man <- function(df){
+  axis_set <- df %>% group_by(chr) %>% dplyr::summarize(center = mean(bp_cum))
+
+  manhplot <- ggplot(df, aes(x = bp_cum, y = -log10(p), color = as_factor(chr))) +
+    geom_hline(yintercept = -log10(0.05/nrow(df)), color = "grey40", linetype = "dashed") +
+    geom_vline(xintercept = mean(49418823, 49426842), linetype="dotted", color = "orange") +
+    geom_point(alpha = 0.75) +
+    geom_point(data = filter(df, p < 0.05/nrow(df)), aes(x = bp_cum, y = -log10(p)), color = "#ef3b2c") +
+    scale_x_continuous(label = axis_set$chr, breaks = axis_set$center) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, 30)) +
+    scale_color_manual(values = rep(c("#cccccc", "#636363"), unique(length(axis_set$chr)))) +
+    labs(x = NULL, y = "-log<sub>10</sub>(p) [GLMM]") +
+    theme_classic() +
+    theme(legend.position = "none",
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          #axis.title.y = element_markdown(),
+          axis.text.x = element_text()
+    )
+  return(manhplot)
+}
+
+lm.plot.glmm <- plot.man(lm.plot)
+
+ggsave(lm.plot.glmm, filename = "./Results/01_lm.png", dpi = 600,  width = 10, height = 2, units = "in")
+
+
+## read the vcf file, this may take a while;
+EAWG.poolseq <- read.pcadapt("./data/final.dp20_400.recode.vcf.gz", type = "vcf");
+x <- pcadapt(input = EAWG.poolseq, K = 20);
+## calculate the percentage of variance explained by each PCA (only considered the first 5)
+(x$singular.values**2/sum(x$singular.values**2))[1:5]
+## sample ID
+
+poplist.int<-read.table(file="./data/SRRInfo.txt",sep="\t",header=T)
+poplist.int<-poplist.int[order(as.numeric(poplist.int$ID)),]
+
+
+## prepare the data for 3d plot
+#Year=c(rep("Time1",16),rep("Time0",4),rep("Time2",16))
+data4plot<-data.frame(unlist(x$scores))
+colnames(data4plot)<-paste(rep("PC",20),seq(1:20),sep="");
+#dim(data4plot)
+data4plot$SampleID<-poplist.int$Run
+data4plot$Treatment<-poplist.int$Treatment
+data4plot$Year<-poplist.int$Time
+data4plot$Year<-as.factor(data4plot$Year)
+data4plot$color<-as.numeric(as.factor(data4plot$Treatment))
+data4plot$color[data4plot$color==1]<-"darkred";
+data4plot$color[data4plot$color==2]<-"#56B4E9";
+data4plot$color[data4plot$color==3]<-"grey";
+data4plot$shape<-as.numeric(as.factor(data4plot$Year))
+data4plot$shape[data4plot$shape==1]<-19
+data4plot$shape[data4plot$shape==2]<-11
+data4plot$shape[data4plot$shape==3]<-15  
+
+## create 3d plot
+pdf(file = "./Results/PCA_plot.pdf", width = 8, height = 6)
+EAWAG.3d<-scatterplot3d( data4plot[1:3],
+               color = data4plot$color,
+              type="h",
+  pch=data4plot$shape,
+  xlab="PC1 (19.5%)", ylab="PC2 (13.0%)", zlab="PC3 (7.9%)")
+
+legend(EAWAG.3d$xyz.convert(0.6, 0.2, 0.2), legend = c("Control","Aphid","Initial"),
+       col =  c('#56B4E9', 'darkred','grey'), pch = 16)
+legend(EAWAG.3d$xyz.convert(0.8, 0.2, 0.2), legend = c("Initial","2021","2022"),
+        pch = c(19,11,15))
+dev.off()
+
+
+
+####################################################
+######## Perform Fst analysis ######################
+####################################################
+
+## read data
+poplist.int<-read.table(file="./data/SRRInfo.txt",sep="\t",header=T);
+poplist.int<-poplist.int[order(as.numeric(poplist.int$ID)),];
+
+sampleID2021<-poplist.int$Run[poplist.int$year==2021]
+
+sampleID2022<-poplist.int$Run[poplist.int$year==2022]
+
+sampleIDInital<-poplist.int$Run[poplist.int$year==0]
+
+
+
+EAWAG.poolseqAll<-vcf2pooldata(vcf.file = "./data/final.dp20_400.recode.vcf.gz", 
+                                poolsizes =rep(250,nrow(poplist.int)) ,
+                                poolnames = poplist.int$Run, min.cov.per.pool =20,
+                                nlines.per.readblock = 1e+06, 
+                                verbose = TRUE )
+
+EAWAG.poolseq.allvsall<-compute.fstats(EAWAG.poolseqAll, computeQmat = F,
+                                       output.pairwise.div=F,
+                                   nsnp.per.bjack.block = 100,computeF4 = F,
+                                   verbose = TRUE)
+
+
+# make heatmap plot
+
+#require(ComplexHeatmap)
+#div.hm <- Heatmap(sim6p.readcount30X.fstats@pairwise.div,
+#cluster_rows =TRUE,cluster_columns=TRUE,name="Divergence",
+#show_heatmap_legend=FALSE,column_title = "Divergence (1-Q2)")
+colnames(EAWAG.poolseq.allvsall@pairwise.fst)<-poplist.int$SampleID
+row.names(EAWAG.poolseq.allvsall@pairwise.fst)<-poplist.int$SampleID
+# Create the heatmap annotation
+col = list(year = c("0" = "lightgrey", "2021" = "darkgrey", "2022" = "black"),
+          Treatment = c("Aphid" = "darkred", "Control" = "#56B4E9","Initial"="lightgrey") )
+
+Treatment.ann <- HeatmapAnnotation(
+  year = poplist.int$Time, Treatment = poplist.int$Treatment,
+  col = col
+)
+
+
+
+fst.hm <- Heatmap(EAWAG.poolseq.allvsall@pairwise.fst,
+cluster_rows =TRUE,cluster_columns=TRUE,name="Fst",
+column_title = "Fst=(Q1-Q2)/(1 - Q2)",row_split=3,column_split = 3,
+top_annotation=Treatment.ann)
+
+
+save_pdf(
+  fst.hm,"./Results/Fst_heatmap.pdf"
+)
+
+
+
+
+
+## creat barplots
+EAWAG.poolseq.pwfst<-melt(EAWAG.poolseq.allvsall@pairwise.fst) 
+
+colnames(EAWAG.poolseq.pwfst)<-c("Ind1","Ind2","Fst");
+
+row.names(poplist.int)<-poplist.int$SampleID
+EAWAG.poolseq.pwfst$Ind1_Treatment<-poplist.int[EAWAG.poolseq.pwfst$Ind1,"Treatment"]
+EAWAG.poolseq.pwfst$Ind2_Treatment<-poplist.int[EAWAG.poolseq.pwfst$Ind2,"Treatment"]
+EAWAG.poolseq.pwfst$Time<-paste(poplist.int[EAWAG.poolseq.pwfst$Ind1,"Time"],poplist.int[EAWAG.poolseq.pwfst$Ind2,"Time"],sep="_");
+
+EAWAG.poolseq.pwfst.combined<-EAWAG.poolseq.pwfst %>%
+  mutate(Fst_type=ifelse(Ind1_Treatment==Ind2_Treatment,"WithinTreatment","BetweenTreatment")) %>%
+  filter(!Ind1==Ind2)
+
+EAWAG.poolseq.pwfst.combined$Fst_type[EAWAG.poolseq.pwfst.combined$Ind1_Treatment=="Control" & EAWAG.poolseq.pwfst.combined$Ind2_Treatment=="Control"]<-"WithinControl";
+
+EAWAG.poolseq.pwfst.combined$Fst_type[EAWAG.poolseq.pwfst.combined$Ind1_Treatment=="Aphid" & EAWAG.poolseq.pwfst.combined$Ind2_Treatment=="Aphid"]<-"WithinAphid";
+head(EAWAG.poolseq.pwfst.combined)
+
+head(EAWAG.poolseq.pwfst.combined)
+
+EAWAG.poolseq.pwfst.combined.between<-EAWAG.poolseq.pwfst.combined[EAWAG.poolseq.pwfst.combined$Fst_type=="BetweenTreatment" ,]
+summary(lm(Fst~Time,data=EAWAG.poolseq.pwfst.combined.between[EAWAG.poolseq.pwfst.combined.between$Time=="2021_2021"| EAWAG.poolseq.pwfst.combined.between$Time=="2022_2022",]))
+
+EAWAG.poolseq.pwfst.combined.within<-EAWAG.poolseq.pwfst.combined[grep("Within",EAWAG.poolseq.pwfst.combined$Fst_type),] %>%
+    filter(Time=="Initial_Initial" | Time=="2021_2021"| Time=="2022_2022") %>%
+  mutate(Group=as.factor(paste(Fst_type,Time,sep="_")))
+
+model<-lm(Fst~Group,data=EAWAG.poolseq.pwfst.combined.within)
+emmeans(model, pairwise ~ Group)
+summary(glht(model, linfct = mcp(Group = 'Tukey')))
+
+
+EAWAG.poolseq.pwfst.combined.betweenYears<-EAWAG.poolseq.pwfst.combined %>%
+  filter(Time=="0_2021"|Time=="0_2022"|Time=="2021_2022") 
+EAWAG.poolseq.pwfst.combined.betweenYears$Time<-factor(EAWAG.poolseq.pwfst.combined.betweenYears$Time)
+model<-lm(Fst~Time,data=EAWAG.poolseq.pwfst.combined.betweenYears)
+summary(glht(model, linfct = mcp(Time = 'Tukey')))
+
+
+EAWAG.poolseq.pwfst.combined.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined[!EAWAG.poolseq.pwfst.combined$Ind1=="C3"|EAWAG.poolseq.pwfst.combined$Ind2=="C3", ],
+                                                    measurevar = "Fst",
+                                                  groupvars = c("Fst_type","Time"));
+
+EAWAG.poolseq.pwfst.combined.within.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
+    filter(Time=="2021_2021"|Time=="2022_2022"|Time=="0_0)") %>%
+    filter(!Fst_type=="BetweenTreatment")
+
+EAWAG.poolseq.pwfst.combined.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined,
+                                            measurevar = "Fst",
+                                            groupvars = c("Fst_type","Time"));
+EAWAG.poolseq.pwfst.combined.within.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
+  filter(Time=="2021_2021"|Time=="2022_2022"|Time=="0_0") %>%
+  filter(!Fst_type=="BetweenTreatment")
+
+
+EAWAG.poolseq.pwfst.combined.betweenTreatment.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
+  filter(Time=="2021_2021"|Time=="2022_2022") %>%
+  filter(Fst_type=="BetweenTreatment")
+
+#EAWAG.poolseq.pwfst.combined.withinTreamtment<-
+
+EAWAG.poolseq.pwfst.combined.betweenYear.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined,
+                                                        measurevar = "Fst",
+                                                        groupvars = c("Time")) %>%
+  filter(Time=="0_2021"|Time=="0_2022"|Time=="2021_2022") %>%
+  mutate(Fst_type="BetweenYear");
+
+EAWAG.poolseq.pwfst4plot<-rbind(EAWAG.poolseq.pwfst.combined.within.sum,
+                                EAWAG.poolseq.pwfst.combined.betweenTreatment.sum,EAWAG.poolseq.pwfst.combined.betweenYear.sum)
+
+EAWAG.poolseq.pwfst4plot$Fst_group<-paste(EAWAG.poolseq.pwfst4plot$Fst_type,EAWAG.poolseq.pwfst4plot$Time,sep="_");
+EAWAG.poolseq.pwfst4plot$Fst_group<-factor(EAWAG.poolseq.pwfst4plot$Fst_group,levels=c("WithinTreatment_0_0","WithinControl_2021_2021","WithinControl_2022_2022","WithinAphid_2021_2021",
+  "WithinAphid_2022_2022","BetweenTreatment_2021_2021","BetweenTreatment_2022_2022","BetweenYear_0_2021","BetweenYear_0_2022","BetweenYear_2021_2022"),ordered=T)
+
+data.poolstat.summary.plot<- ggplot(EAWAG.poolseq.pwfst4plot, aes(x=Fst_group, y=mean)) + 
+  geom_bar( aes(x=Fst_group, y=mean), stat="identity", fill="grey", alpha=0.5)+
+  # geom_point()+
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.0,
+                position=position_dodge(0.01)) +
+  labs(title="Fst", x="Year", y = "Fst")+
+  theme_classic() 
+
+ggsave(data.poolstat.summary.plot,file="./Results/Fst_summaryplot.pdf")
+
+
+### plot CMH results
+
+cmh.2021 <-fread("./data/cmh_test2021_update2.clean.bed", sep="\t", header=F);
+cmh.2022 <-fread("./data/cmh_test2022_update2.clean.bed", sep="\t", header=F);
+head(cmh.2021)
+colnames(cmh.2021)<-c("CHR","POS","Start","End","P");
+colnames(cmh.2022)<-c("CHR","POS","Start","End","P");
+
+cmh.2021.4plot<-cmh.2021  %>%
+  mutate(SNP=paste(CHR,POS,sep="_")) %>%
+  aggregate(P~SNP,  FUN=function(x) c(mean=geoMean(x))) %>%
+  separate_wider_delim(SNP, "_", names = c("CHR", "BP")) %>%
+  mutate(SNP=paste(CHR,BP,sep="_")) %>%
+  mutate(CHR= as.numeric(str_remove(CHR, "CHR"))) %>%
+  mutate(BP=as.numeric(BP))
+
+
+cmh.2022.4plot<-cmh.2022  %>%
+  mutate(SNP=paste(CHR,POS,sep="_")) %>%
+  aggregate(P~SNP,  FUN=function(x) c(mean=geoMean(x))) %>%
+  separate_wider_delim(SNP, "_", names = c("CHR", "BP")) %>%
+  mutate(SNP=paste(CHR,BP,sep="_")) %>%
+  mutate(CHR= as.numeric(str_remove(CHR, "CHR"))) %>%
+  mutate(BP=as.numeric(BP))
+
+
+data.combined<-left_join(cmh.2021.4plot, cmh.2022.4plot, 
+                         by = join_by(SNP == SNP))  %>%
+                    mutate(CMH2021=-log10(P.x),CMH2022=-log10(P.y),BP=BP.x,CHR=CHR.x)%>%
+  dplyr::select(SNP,CHR,BP,CMH2021,CMH2022) %>%
+                    dplyr::filter(!is.na(CMH2021)) %>%
+                    dplyr::filter(!is.na(CMH2022)) 
+
+head(data.combined)
+CMplot(data.combined,type="p",plot.type="m",LOG10=F,col=c("grey60","#4197d8"),
+       file="png",chr.labels.angle=45,
+       dpi=300,file.output=TRUE,verbose=TRUE,multracks=TRUE,threshold = -log10(0.01/nrow(data.combined)),amplify=T,threshold.lty=1,signal.col ="darkgreen",cex=0.3,signal.cex =0.4,file.name="CMHplot")
+
+
+
+```
+## Analzye transplant experiment for D. magna and create Figure 4
+
+```{r Load Daphnia transplant data, echo=T}
+
+## read data from KW25 and KW30
+data.dm.transplant.kw25<-readxl::read_excel("./data/DaphinaTransPlant.xlsx",sheet = "KW25")
+data.dm.transplant.kw25$Time<-"KW25";
+data.dm.transplant.kw30<-readxl::read_excel("./data/DaphinaTransPlant.xlsx",sheet = "KW30")
+data.dm.transplant.kw30$Time<-"KW30";
+
+
+dim(data.dm.transplant.kw30)
+dim(data.dm.transplant.kw25)
+head(data.dm.transplant.kw30)
+head(data.dm.transplant.kw25)
+# combine two tables together;
+data.dm.transplant<-rbind(data.dm.transplant.kw25,data.dm.transplant.kw30);
+data.dm.transplant<-data.dm.transplant[!is.na(data.dm.transplant$End_total),];
+dim(data.dm.transplant)
+# Calculate growth rate;
+data.dm.transplant$GR<-(log(data.dm.transplant$End_Adult+1)-log(data.dm.transplant$StartN))/14; # as per day;
+
+# exclude non-self data, optional
+#data.dm.transplant<-data.dm.transplant[!data.dm.transplant$Reciever==data.dm.transplant$Origin,];
+
+dim(data.dm.transplant);
+PondInfo<-read.table(file="./data/PondInf.txt",sep="\t", header=T,row.names=1);
+data.dm.transplant$TestCommunity<-PondInfo[data.dm.transplant$Reciever,1];
+data.dm.transplant$OriginCommunity<-PondInfo[data.dm.transplant$Origin,1];
+# remove missing data;
+#data.dm.transplant<-data.dm.transplant[!is.na(data.dm.transplant$End_total),]
+dim(data.dm.transplant);
+head(data.dm.transplant)
+# creat sel-matching information to determin self vs non-self effects:
+data.dm.transplant$Self[data.dm.transplant$Reciever==data.dm.transplant$Origin]<-"Self";
+data.dm.transplant$Self[!data.dm.transplant$Reciever==data.dm.transplant$Origin]<-"Nonself";
+
+# statistical analysis;
+# GR differed between two time points;
+model1<-lmer(GR~TestCommunity*OriginCommunity+Time+(1|Block) ,data=data.dm.transplant);
+summary(model1)
+Anova(model1,test.statistic = "F");
+
+## split the data into two time points;
+## KW25
+# check the self-nonself effects:
+model1<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+Self+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
+model2<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
+anova(model1, model2)
+## self non-self has no effects;
+
+model2<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" ,]);
+summary(model1)
+Anova(model2,test.statistic = "F");
+
+# Interactions between testing community and origin community is marginally significant.
+
+## analyze the community separately
+# week 25
+
+model.kw25.aphid<-lmer(GR~TestCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" &data.dm.transplant$OriginCommunity=="Aphid",]);
+summary(model.kw25.aphid)
+Anova(model.kw25.aphid,test.statistic = "F");
+
+
+
+model.kw25.control<-lmer(GR~TestCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW25" &data.dm.transplant$OriginCommunity=="Control",]);
+summary(model.kw25.control)
+Anova(model.kw25.control,test.statistic = "F");
+
+# week 30
+
+model.kw30<-lmer(GR~TestCommunity+TestCommunity:OriginCommunity+(1|Block),data=data.dm.transplant[data.dm.transplant$Time=="KW30" ,]);
+summary(model.kw30)
+Anova(model.kw30,test.statistic = "F");
+## no differences in KW30;
+
+model.kw30.aphid<-lmer(GR~TestCommunity+(1|Block) ,data=data.dm.transplant[data.dm.transplant$Time=="KW30" &data.dm.transplant$OriginCommunity=="Aphid",]);
+summary(model.kw30.aphid)
+Anova(model.kw30.aphid,test.statistic = "F");
+
+model.kw30.control<-lmer(GR~TestCommunity+(1|Block) ,data=data.dm.transplant[data.dm.transplant$Time=="KW30" &data.dm.transplant$OriginCommunity=="Control",]);
+summary(model.kw30.control)
+Anova(model.kw30.control,test.statistic = "F");
+
+
+# plot the effects for two different time points;
+
+PlotTransplant<-function(data=NULL) {
+  require(ggplot2)
+   summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                        conf.interval=.95, .drop=TRUE) {
+    require(plyr)
+    
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+      if (na.rm) sum(!is.na(x))
+      else       length(x)
+    }
+    
+    # This is does the summary; it's not easy to understand...
+    datac <- ddply(data, groupvars, .drop=.drop,
+                   .fun= function(xx, col, na.rm) {
+                     c( N    = length2(xx[,col], na.rm=na.rm),
+                        mean = mean   (xx[,col], na.rm=na.rm),
+                        sd   = sd     (xx[,col], na.rm=na.rm),
+                        sum  = sum     (xx[,col], na.rm=na.rm)
+                     )
+                   },
+                   measurevar,
+                   na.rm
+    )
+    
+    # Rename the "mean" column
+    # datac <- rename(datac, c("mean"=measurevar))
+    
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+    
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval:
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+    
+    return(datac)
+  }
+    dat<-data;
+  dat.sum<-summarySE(data=dat,measurevar = "GR",
+                     groupvars = c("TestCommunity","OriginCommunity","Time"));
+    dat.sum$TestCommunity<-factor(dat.sum$TestCommunity,levels=c("Control","Aphid"), ordered = T);
+    dat.sum$OriginCommunity<-factor(dat.sum$OriginCommunity,levels=c("Control","Aphid"), ordered = T);
+    
+  p.kw25<-ggplot(dat.sum[dat.sum$Time=="KW25",], aes(x = TestCommunity, y = mean, group=OriginCommunity)) + 
+      geom_point(aes(col=OriginCommunity),
+                 position = position_dodge(width = 0.1), 
+        size = 5)  +
+      
+      geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                     position = position_dodge(width = 0.1),
+                    show.legend = FALSE) +
+      labs(x="Pond Treatment", y="Growth rate") +
+      geom_line(aes(col=OriginCommunity, linetype=OriginCommunity),size=1, position = position_dodge(width = 0.1)) +
+      theme_bw() + 
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      scale_color_manual(values=c('#56B4E9','darkred'))+scale_linetype_manual(values=c( "dashed","solid"))
+    
+  p.kw30<-ggplot(dat.sum[dat.sum$Time=="KW30",], aes(x = TestCommunity, y = mean, group=OriginCommunity)) + 
+      geom_point(aes(col=OriginCommunity),
+                 position = position_dodge(width = 0.1), 
+        size = 5)  +
+      geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                     position = position_dodge(width = 0.1),
+                    show.legend = FALSE) +
+      labs(x="Pond Treatment", y="Growth rate") +
+      geom_line(aes(col=OriginCommunity, linetype=OriginCommunity),size=1, position = position_dodge(width = 0.1)) +
+      theme_bw() + 
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      scale_color_manual(values=c('#56B4E9','darkred'))+scale_linetype_manual(values=c( "dashed","solid"))
+
+  return(list(p.kw25,p.kw30));
+}
+
+
+DM.TransplatPlot<-PlotTransplant(data.dm.transplant)
+ggsave(DM.TransplatPlot[[1]], file="./Results/DM_transplant_KW25.pdf",height  =5.7,width  = 12.1) 
+ggsave(DM.TransplatPlot[[2]], file="./Results/DM_transplant_KW30.pdf",height  =5.7,width  = 12.1) 
+
+
+```
+
+## Analzye transplant experiment of the duckweed and aphids and make Fig. 5
+
+```{r Load transplant experiment data, echo=T}
+
+## analyze the transplant experiment for duckweed
+
+## read data from KW25 and KW30
+data.feedback2022.duckweed.kw30<-readxl::read_excel("./data/FeedbackExperiment2022.xlsx",sheet = "KW30_Duckweed")
+data.feedback2022.duckweed.kw25<-readxl::read_excel("./data/FeedbackExperiment2022.xlsx",sheet = "KW25_Duckweed")
+PondInfo<-read.table(file="./data/PondInf.txt",sep="\t", header=T,row.names=1);
+data<-data.feedback2022.duckweed.kw25
+data<-data.feedback2022.duckweed.kw30
+
+Preprocessing<-function(data=data,PondInfo=PondInfo){
+  CalResistance<-function(data=NULL, Var=NULL){
+    data.out<-matrix(ncol=5,nrow=0);
+    Pond<-levels(as.factor(data$Pond));
+    Genotype<-levels(as.factor(data$Genotype));
+    for(pd in Pond){
+      for(gt in Genotype){
+        data.sub<-data[data$Pond==pd & data$Genotype==gt,];
+        if(nrow(data.sub)==2){
+          Resistance<-data.sub[data.sub$Treatment=="+Aphid",Var]-data.sub[data.sub$Treatment=="Control",Var];
+          PondTreatment<-as.vector(data.sub[1,"PondTreatment"]);
+          Block<-as.vector(data.sub[1,"Block"]);
+          data.out<-rbind(data.out,c(pd,Block,gt,PondTreatment, Resistance=Resistance))
+        }else{
+          #  print ("Error");
+          # print (data.sub);
+        }
+      }
+    }
+    return(data.out); 
+  }
+  dat=data.frame(data);
+  if( ncol(dat) == 9){
+    dat<-dat[is.na(dat$Note),];
+    dat<-dat[,-9];
+  }else{
+  dat<-dat[!is.na(dat$End_FrondN),];
+  }
+  dat<-dat[!dat$Pond=="6A",];
+  dat<-dat[!dat$Pond=="1D",];
+  dat<-dat[!dat$Pond=="3D",];
+  dat$GR_N<-(log(1+round(dat$End_FrondN,0)) - log(1+round(dat$Start_number,0))) /round(dat$Start_number,0);
+  dat$GR_W<-(log (1+round(dat$End_weight,0)) - log(1+round(dat$Start_weight,0)))/round(dat$Start_weight,0);
+  dat$PondTreatment<-PondInfo[dat$Pond,"Treatment"];
+  dat$Genotype<-as.factor(dat$Genotype);
+  dat.ResistN<-CalResistance(dat,Var="GR_N");
+  dat.ResistW<-CalResistance(dat,Var="GR_W");
+  dat.ResistN<-data.frame(dat.ResistN)
+  colnames(dat.ResistN)<-c("Pond","Block","Genotype","PondTreatment","Resistance");
+  dat.ResistN$Resistance<-as.numeric(dat.ResistN$Resistance)
+  dat.ResistW<-data.frame(dat.ResistW)
+  colnames(dat.ResistW)<-c("Pond","Block","Genotype","PondTreatment","Resistance");
+  dat.ResistW$Resistance<-as.numeric(dat.ResistW$Resistance);
+  dat.resist<-merge(dat.ResistN,dat.ResistW, by.x=c("Pond","Block","Genotype","PondTreatment"),by.y=c("Pond","Block","Genotype","PondTreatment"),all.x = TRUE, all.y = TRUE);
+  colnames(dat.resist)[5:6]<-c("ResistN","ResistW");
+  return(list(dat,dat.resist));
+}
+
+data.feedback2022.duckweed.kw30.GR<-Preprocessing(data=data.feedback2022.duckweed.kw30,PondInfo=PondInfo)[[1]]
+data.feedback2022.duckweed.kw30.RS<-Preprocessing(data=data.feedback2022.duckweed.kw30,PondInfo=PondInfo)[[2]]
+
+data.feedback2022.duckweed.kw25.GR<-Preprocessing(data=data.feedback2022.duckweed.kw25,PondInfo=PondInfo)[[1]]
+data.feedback2022.duckweed.kw25.RS<-Preprocessing(data=data.feedback2022.duckweed.kw25,PondInfo=PondInfo)[[2]]
+
+
+## combine the two experiments together
+data.feedback2022.duckweed.combined.GR<-rbind(data.feedback2022.duckweed.kw25.GR,data.feedback2022.duckweed.kw30.GR);
+data.feedback2022.duckweed.combined.GR$KW<-c(rep('KW25',nrow(data.feedback2022.duckweed.kw25.GR)),rep('KW30',nrow(data.feedback2022.duckweed.kw30.GR)))
+head(data.feedback2022.duckweed.combined.GR)
+
+head(data.feedback2022.duckweed.combined.GR)
+data.feedback2022.duckweed.combined.GR$Treatment<-factor(data.feedback2022.duckweed.combined.GR$Treatment,levels=c("Control","+Aphid"), ordered = T)
+data.feedback2022.duckweed.combined.GR$PondTreatment<-factor(data.feedback2022.duckweed.combined.GR$PondTreatment,levels=c("Control","Aphid"), ordered = T)
+
+
+data.feedback2022.duckweed.combined.RS<-rbind(data.feedback2022.duckweed.kw25.RS,data.feedback2022.duckweed.kw30.RS);
+data.feedback2022.duckweed.combined.RS$KW<-c(rep('KW25',nrow(data.feedback2022.duckweed.kw25.RS)),rep('KW30',nrow(data.feedback2022.duckweed.kw30.RS)))
+head(data.feedback2022.duckweed.combined.RS)
+
+## perform statistical analysis for growth rate data;
+head(data.feedback2022.duckweed.combined.GR)
+data.feedback2022.duckweed.GR.model1<-lmer(GR_N~PondTreatment*Genotype + (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control",])
+
+data.feedback2022.duckweed.GR.model2<-lmer(GR_N~Genotype+PondTreatment+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control",])
+
+data.feedback2022.duckweed.GR.model3<-lmer(GR_N~Genotype+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control",])
+
+
+(anova(data.feedback2022.duckweed.GR.model1,data.feedback2022.duckweed.GR.model2))
+
+(anova(data.feedback2022.duckweed.GR.model2,data.feedback2022.duckweed.GR.model3))
+
+Anova(data.feedback2022.duckweed.GR.model2, test.statistic = "F");
+
+Anova(data.feedback2022.duckweed.GR.model1, test.statistic = "F");
+
+data.feedback2022.duckweed.GR.model4<-lmer(GR_N~PondTreatment+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control" & 
+                                                                                                                            data.feedback2022.duckweed.combined.GR$Genotype=="102",])
+
+Anova(data.feedback2022.duckweed.GR.model4, test.statistic = "F");
+
+## perform statistical analysis for resistant data;
+head(data.feedback2022.duckweed.combined.RS)
+data.feedback2022.duckweed.RS.model1<-lmer(ResistN~PondTreatment*Genotype + (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.RS)
+data.feedback2022.duckweed.RS.model2<-lmer(ResistN~Genotype+PondTreatment+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.RS)
+data.feedback2022.duckweed.RS.model3<-lmer(ResistN~Genotype+ (1|Block) + (1|KW), data=data.feedback2022.duckweed.combined.RS)
+
+(anova(data.feedback2022.duckweed.RS.model1,data.feedback2022.duckweed.RS.model2))
+(anova(data.feedback2022.duckweed.RS.model2,data.feedback2022.duckweed.RS.model3))
+
+Anova(data.feedback2022.duckweed.RS.model1, test.statistic = "F");
+Anova(data.feedback2022.duckweed.RS.model2, test.statistic = "F");
+Anova(data.feedback2022.duckweed.RS.model3, test.statistic = "F");
+
+
+# plot GR data;
+PlotCommunityEffects<-function(data=NULL, Var=NULL, ylab=NULL){
+  summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                        conf.interval=.95, .drop=TRUE) {
+    require(plyr)
+    
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+      if (na.rm) sum(!is.na(x))
+      else       length(x)
+    }
+    
+    # This is does the summary; it's not easy to understand...
+    datac <- ddply(data, groupvars, .drop=.drop,
+                   .fun= function(xx, col, na.rm) {
+                     c( N    = length2(xx[,col], na.rm=na.rm),
+                        mean = mean   (xx[,col], na.rm=na.rm),
+                        sd   = sd     (xx[,col], na.rm=na.rm),
+                        sum  = sum     (xx[,col], na.rm=na.rm)
+                     )
+                   },
+                   measurevar,
+                   na.rm
+    )
+    
+    # Rename the "mean" column
+    # datac <- rename(datac, c("mean"=measurevar))
+    
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+    
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval:
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+    
+    return(datac)
+  }
+    dat<-data;
+    id.num<-grep(Var,colnames(dat));
+    colnames(dat)[id.num]<-"TestVar";
+  dat.sum<-summarySE(data=dat,measurevar = "TestVar",
+                     groupvars = c("PondTreatment","Genotype","KW"));
+  dat.sum$PondTreatment<-factor(dat.sum$PondTreatment,levels=c("Control","Aphid"),ordered=T);
+  dat.sum$Genotype<-factor(dat.sum$Genotype,levels=c("102","56","58","65"),ordered = T);
+  dat.sum.kw25<-dat.sum[dat.sum$KW=="KW25",];
+  dat.sum.kw30<-dat.sum[dat.sum$KW=="KW30",];
+    
+    p.kw25<-ggplot(dat.sum.kw25, aes(x = PondTreatment, y = mean, group=Genotype)) + 
+      geom_point(aes(col=PondTreatment),size=5)  +
+      geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                    show.legend = FALSE) +
+      labs(x="Pond Treatment", y=ylab) +
+      geom_line(size=1) +
+      theme_bw() + 
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      scale_color_manual(values=c('#00AFBB','darkred'))+
+      facet_grid( ~ Genotype)
+    p.kw30<-ggplot(dat.sum.kw30, aes(x = PondTreatment, y = mean, group=Genotype)) + 
+      geom_point(aes(col=PondTreatment),size=5)  +
+      geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                    show.legend = FALSE) +
+      labs(x="Pond Treatment", y=ylab) +
+      geom_line(size=1) +
+      theme_bw() + 
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+      scale_color_manual(values=c('#00AFBB','darkred'))+
+      facet_grid( ~ Genotype)    
+    
+    return(list(p.kw25,p.kw30));
+      
+}
+
+PlotCommunityEffects_MeanKW<-function(data=NULL, Var=NULL, ylab=NULL){
+  summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=FALSE,
+                        conf.interval=.95, .drop=TRUE) {
+    require(plyr)
+    
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+      if (na.rm) sum(!is.na(x))
+      else       length(x)
+    }
+    
+    # This is does the summary; it's not easy to understand...
+    datac <- ddply(data, groupvars, .drop=.drop,
+                   .fun= function(xx, col, na.rm) {
+                     c( N    = length2(xx[,col], na.rm=na.rm),
+                        mean = mean   (xx[,col], na.rm=na.rm),
+                        sd   = sd     (xx[,col], na.rm=na.rm),
+                        sum  = sum     (xx[,col], na.rm=na.rm)
+                     )
+                   },
+                   measurevar,
+                   na.rm
+    )
+    
+    # Rename the "mean" column
+    # datac <- rename(datac, c("mean"=measurevar))
+    
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+    
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval:
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+    
+    return(datac)
+  }
+  dat<-data;
+  id.num<-grep(Var,colnames(dat));
+  colnames(dat)[id.num]<-"TestVar";
+  dat.sum<-summarySE(data=dat,measurevar = "TestVar",
+                     groupvars = c("PondTreatment","Genotype"));
+  dat.sum$PondTreatment<-factor(dat.sum$PondTreatment,levels=c("Control","Aphid"),ordered=T);
+  dat.sum$Genotype<-factor(dat.sum$Genotype,levels=c("102","56","58","65"),ordered = T);
+#  dat.sum.kw25<-dat.sum[dat.sum$KW=="KW25",];
+#  dat.sum.kw30<-dat.sum[dat.sum$KW=="KW30",];
+  
+ 
+  p.kw_mean<-ggplot(dat.sum, aes(x = PondTreatment, y = mean, group=Genotype)) + 
+    geom_point(aes(col=PondTreatment),size=5)  +
+    geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                  show.legend = FALSE) +
+    labs(x="Pond Treatment", y=ylab) +
+    geom_line(size=1) +
+    theme_bw() + 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+    scale_color_manual(values=c('#56B4E9','darkred'))+
+    facet_grid( ~ Genotype)    
+  
+  return(p.kw_mean);
+  
+}
+
+GR.control_KWmean<-PlotCommunityEffects_MeanKW(data=data.feedback2022.duckweed.combined.GR[data.feedback2022.duckweed.combined.GR$Treatment=="Control",],Var="GR_N",ylab = "Growth rate (frond number)");
+Resistance.KWMean<-PlotCommunityEffects_MeanKW(data=data.feedback2022.duckweed.combined.RS,Var="ResistN",ylab = "Resistance (frond number)");
+
+ggsave(file="./Results/FeedbackGrowthRate.pdf",GR.control_KWmean);
+ggsave(file="./Results/FeedbackResistance.pdf",Resistance.KWMean);
+
+
+## analyze the feedback data of the aphid growth rate
+
+data.feedback2022.Aphid.kw25<-readxl::read_excel("./data/FeedbackExperiment2022.xlsx",sheet = "KW25_Aphid")
+data.feedback2022.Aphid.kw30<-readxl::read_excel("./data/FeedbackExperiment2022.xlsx",sheet = "KW30_Aphid")
+data.feedback2022.Aphid.kw25<-data.frame(data.feedback2022.Aphid.kw25)
+data.feedback2022.Aphid.kw30<-data.frame(data.feedback2022.Aphid.kw30)
+
+
+PreprocessingAphid<-function(data=data,PondInfo=PondInfo){
+  dat=data.frame(data);
+  dat<-dat[!dat$Pond=="6A",];
+  dat<-dat[!dat$Pond=="1D",];
+  dat<-dat[!dat$Pond=="3D",];
+  dat$GR_N<-log( 1+ ((round(dat$AphidN,0) -log(5))/5));
+  dat$PondTreatment<-PondInfo[dat$Pond,"Treatment"];
+  dat$PondTreatment<-factor(dat$PondTreatment, levels=c("Control","Aphid"),ordered=T)
+  dat$Genotype<-factor(dat$Genotype,levels=c("102","56","58","65"),ordered=T)
+  return(dat);
+}
+
+data.feedback2022.Aphid.kw25<-PreprocessingAphid(data=data.feedback2022.Aphid.kw25,PondInfo=PondInfo)
+data.feedback2022.Aphid.kw30<-PreprocessingAphid(data=data.feedback2022.Aphid.kw30,PondInfo=PondInfo)
+data.feedback2022.Aphid.combined<-rbind(data.feedback2022.Aphid.kw25,data.feedback2022.Aphid.kw30);
+data.feedback2022.Aphid.combined$KW<-c(rep('KW25',nrow(data.feedback2022.Aphid.kw25)),rep('KW30',nrow(data.feedback2022.Aphid.kw30)))
+## perform statistical analysis
+aphid.model1<-lmer(GR_N~PondTreatment*Genotype + (1|Block) + (1|KW), data=data.feedback2022.Aphid.combined);
+aphid.model2<-lmer(GR_N~PondTreatment+Genotype + (1|Block) + (1|KW), data=data.feedback2022.Aphid.combined);
+anova(aphid.model1,aphid.model2)
+Anova(aphid.model2, test.statistic = "F")
+
+
+data.feedback2022.Aphid<-data.feedback2022.Aphid.combined
+head(data.feedback2022.Aphid);
+# remove containminations and 6A
+data.feedback2022.Aphid<-data.feedback2022.Aphid[!data.feedback2022.Aphid$Pond=="6A",];
+data.feedback2022.Aphid<-data.feedback2022.Aphid[!data.feedback2022.Aphid$Pond=="1D",];
+data.feedback2022.Aphid<-data.feedback2022.Aphid[!data.feedback2022.Aphid$Pond=="3D",];
+
+
+data.feedback2022.Aphid$PondTreatment<-PondInfo[data.feedback2022.Aphid$Pond,"Treatment"];
+data.feedback2022.Aphid$Genotype=as.factor(data.feedback2022.Aphid$Genotype)
+
+data.feedback2022.Aphid$AphidN<-(log(round(data.feedback2022.Aphid$AphidN,0))-log(5))/35;
+data.feedback2022.Aphid$PondTreatment<-factor(data.feedback2022.Aphid$PondTreatment, levels=c("Control","Aphid"),ordered=T)
+data.feedback2022.Aphid.sum<-summarySE(data=data.feedback2022.Aphid,measurevar = "AphidN", groupvars = c("Genotype","PondTreatment"))
+data.feedback2022.Aphid.sum$Genotype<-factor(data.feedback2022.Aphid.sum$Genotype,levels=c("102","56","58","65"),ordered=T)
+
+p<-ggplot(data.feedback2022.Aphid.sum, aes(x = PondTreatment, y = mean, group=Genotype)) + 
+  geom_point(aes(col=PondTreatment),size=5)  +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width = 0,
+                show.legend = FALSE) +
+  labs(x="Pond Treatment", y="AphidGrowth(Frond number)") +
+  geom_line(size=1) +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  scale_color_manual(values=c('#56B4E9','darkred'))+
+  facet_grid( ~ Genotype)
+p
+
+ggsave(p, file="./Results/AphidGrowth_KWmean.pdf", height  =5.7,width  = 12.1/2);
+
+
+```
