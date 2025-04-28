@@ -12,17 +12,14 @@ The r-marddown file can also be found in this folder.
 
 # Code
 
-### **1.** [Aphid, Duckweed, and Daphnia monitoring](/1_monitoring)
-Data and code for reproducing Fig. 1 and Fig. S2.
-
-### **2.** [Environmental monitoring outdoors](/2_environment)
+### **1.** [Aphid, Duckweed, Daphnia and Environmental monitoring](/1_monitoring)
 Data and code for reproducing Fig. 1, Fig. S2, Fig. S3, Fig. S13, and Fig. S14.
 
-### **3.** [Parasite susceptibility](/3_parasite)
+### **2.** [Parasite susceptibility](/3_parasite)
 Data and code for reproducing Fig. 2.
 
-### **4.** [Pool-seq](/4_poolseq)
+### **3.** [Pool-seq](/4_poolseq)
 Data and code for reproducing Fig. 3, Fig. S15, Fig. S16, Fig. S17, Fig. S18, and Tab. S1.
 
-### **5.** [Transplant experiments](/5_transplant)
+### **4.** [Transplant experiments](/5_transplant)
 Data and code for reproducing Fig. 4 and Fig. 5.
