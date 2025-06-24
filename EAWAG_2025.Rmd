@@ -1,7 +1,7 @@
 ---
-title: "R-scripts4Schaefer et al. 2024"
+title: "R-scripts4Schaefer et al. 2025"
 output: html_document
-date: "2024-06-19"
+date: "2025-06-19"
 ---
 
 ```{r setup, include=FALSE}
@@ -12,8 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 ```{r load function and packages}
-#setwd("~/Xu's lab Dropbox/Shuqing Xu/Mystuff/Collaborations/EAWAG");
-setwd("~/Documents/Xdrive/Seafile/XDrive/Projects/EAWAG/")
+#setwd("/Users/shuqing.xu/Seafile/XDrive/Projects/EAWAG/Revision/")
 
 # List of packages for session
 .packages = c("ggplot2", "plyr", "data.table","EnvStats","tibble","tidyr","qqman","stringr",
@@ -292,8 +291,8 @@ summarySE <- function(data=NULL, measurevar=NULL, groupvars=NULL, na.rm=T,
 
 ## read all data into one excell sheet;
 
-Data.all<- sapply(readxl::excel_sheets("./data/ADD-Monitoring_v2.xlsx"), simplify = F, USE.NAMES = F,
-                  function(X) readxl::read_excel("./data/ADD-Monitoring_v2.xlsx", sheet = X))
+Data.all<- sapply(readxl::excel_sheets("./data/ADD-Monitoring_v3.xlsx"), simplify = F, USE.NAMES = F,
+                  function(X) readxl::read_excel("./data/ADD-Monitoring_v3.xlsx", sheet = X))
 PondInfo<-read.table(file="./data/PondInf.txt",sep="\t", header=T,row.names=1);
 ## 26 data sheet
 head(Data.all)
@@ -472,9 +471,11 @@ Block<-substr(ADD.Monitor.all.sub.clean$Pond,start = 1,stop = 1)
 
 ADD.Monitor.all.sub.clean[ADD.Monitor.all.sub.clean$Time=="57",c("Treatment","NP_ratio")]
 
-AphidEffects(data=(log(ADD.Monitor.all.sub.clean$NP_ratio)),Block,Pond=ADD.Monitor.all.sub.clean$Pond,Time =  ADD.Monitor.all.sub.clean$Time,Week=ADD.Monitor.all.sub.clean$Week, Year=ADD.Monitor.all.sub.clean$Year, Treatment = ADD.Monitor.all.sub.clean$Treatment,TimeRemove = 2,Parameters  = "NP_ratio")
+AphidEffects(data=((ADD.Monitor.all.sub.clean$NP_ratio)),Block,Pond=ADD.Monitor.all.sub.clean$Pond,Time =  ADD.Monitor.all.sub.clean$Time,Week=ADD.Monitor.all.sub.clean$Week, Year=ADD.Monitor.all.sub.clean$Year, Treatment = ADD.Monitor.all.sub.clean$Treatment,TimeRemove = 2,Parameters  = "NP_ratio")
 
 AphidEffects(data=((ADD.Monitor.all.sub.clean$N_MC)),Block,Pond=ADD.Monitor.all.sub.clean$Pond,Time =  ADD.Monitor.all.sub.clean$Time,Week=ADD.Monitor.all.sub.clean$Week, Year=ADD.Monitor.all.sub.clean$Year, Treatment = ADD.Monitor.all.sub.clean$Treatment,TimeRemove = 2,Parameters  = "N_MC")
+
+AphidEffects(data=(log1p(ADD.Monitor.all.sub$AphidAbundance)),Block,Pond=ADD.Monitor.all.sub$Pond,Time =  ADD.Monitor.all.sub$Time,Week=ADD.Monitor.all.sub$Week, Year=ADD.Monitor.all.sub$Year, Treatment = ADD.Monitor.all.sub$Treatment,TimeRemove = 0,Parameters  = "AphidAbundance")
 
 
 ADD.Monitor.all.sub.clean[ADD.Monitor.all.sub.clean$Time>=40,c("Week","NP_ratio","Pond","Treatment")]
@@ -525,7 +526,7 @@ summarySE(ADD.Monitor.all.sub.clean.2022,measurevar = "pH",groupvars = "Treatmen
 
 ```
 
-## Analyze resistotype data and create Figure 2
+## Analyze resistotype data and create Figure S15
 
 ```{r Load resistotype data, echo=T}
 
@@ -725,7 +726,7 @@ summary(mod_P21)
 ```
 
 
-## Analzye population genomics data and create figrue 3, S15, S16
+## Analzye population genomics data and create figrue 2, S16, S17
 
 ```{r Load genomic data, echo=F}
 
@@ -826,43 +827,125 @@ legend(EAWAG.3d$xyz.convert(0.8, 0.2, 0.2), legend = c("Initial","2021","2022"),
 dev.off()
 
 
-
 ####################################################
 ######## Perform Fst analysis ######################
 ####################################################
 
-## read data
-poplist.int<-read.table(file="./data/SRRInfo.txt",sep="\t",header=T);
-poplist.int<-poplist.int[order(as.numeric(poplist.int$ID)),];
+# 1. Load sample metadata
+info <- read.table("./data/SequenceID_info.txt", header=TRUE, sep="\t",
+                   stringsAsFactors=FALSE)
 
-sampleID2021<-poplist.int$Run[poplist.int$year==2021]
+# Keep only the samples we want (remove those flagged "Y", and only 2021 & 2022)
+#info <- subset(info, Remove=="N" & Year %in% c(2021,2022))
 
-sampleID2022<-poplist.int$Run[poplist.int$year==2022]
+# 2. Define the path to your VCF and the (haploid) pool sizes:
+vcf_file    <- "./data/final.dp20_400.recode.vcf.gz"
+# TODO: replace the following with your true haploid pool sizes per sample:
+pool_sizes  <- rep(250, nrow(info))
 
-sampleIDInital<-poplist.int$Run[poplist.int$year==0]
 
-
-
-EAWAG.poolseqAll<-vcf2pooldata(vcf.file = "./data/final.dp20_400.recode.vcf.gz", 
-                                poolsizes =rep(250,nrow(poplist.int)) ,
-                                poolnames = poplist.int$Run, min.cov.per.pool =20,
+# 3. Read the VCF into a single pooldata object,
+#    tuning blocks and threads for large files :contentReference[oaicite:0]{index=0}
+pd_all <- vcf2pooldata(vcf.file = "./data/final.dp20_400.recode.vcf.gz", 
+                                poolsizes =pool_sizes ,
+                                poolnames = info$Sample, min.cov.per.pool =20,
                                 nlines.per.readblock = 1e+06, 
                                 verbose = TRUE )
+# Helper to subset a pooldata object by sample names
 
-EAWAG.poolseq.allvsall<-compute.fstats(EAWAG.poolseqAll, computeQmat = F,
-                                       output.pairwise.div=F,
+# 4. Compute all pairwise FST at once
+pw <-compute.fstats(pd_all, computeQmat = F,
                                    nsnp.per.bjack.block = 100,computeF4 = F,
                                    verbose = TRUE)
+fst_mat <- slot(pw, "pairwise.fst")   # matrix of Fst estimates :contentReference[oaicite:0]{index=0}
+
+info <- subset(info, Remove=="N")
 
 
-# make heatmap plot
 
-#require(ComplexHeatmap)
-#div.hm <- Heatmap(sim6p.readcount30X.fstats@pairwise.div,
-#cluster_rows =TRUE,cluster_columns=TRUE,name="Divergence",
-#show_heatmap_legend=FALSE,column_title = "Divergence (1-Q2)")
-colnames(EAWAG.poolseq.allvsall@pairwise.fst)<-poplist.int$SampleID
-row.names(EAWAG.poolseq.allvsall@pairwise.fst)<-poplist.int$SampleID
+# 4) Define sample‐sets for each category
+s_init  <- info$Sample[info$Year=="Initial"]
+s_ctl21 <- info$Sample[info$Year=="2021" & info$Treatment=="Control"]
+s_aph21 <- info$Sample[info$Year=="2021" & info$Treatment=="Aphid"]
+s_ctl22 <- info$Sample[info$Year=="2022" & info$Treatment=="Control"]
+s_aph22 <- info$Sample[info$Year=="2022" & info$Treatment=="Aphid"]
+all21   <- info$Sample[info$Year=="2021"]
+all22   <- info$Sample[info$Year=="2022"]
+
+groups <- list(
+  WithinTreatment_0_0        = combn(s_init, 2, simplify=FALSE),
+  WithinControl_2021_2021    = combn(s_ctl21, 2, simplify=FALSE),
+  WithinControl_2022_2022    = combn(s_ctl22, 2, simplify=FALSE),
+  WithinAphid_2021_2021      = combn(s_aph21, 2, simplify=FALSE),
+  WithinAphid_2022_2022      = combn(s_aph22, 2, simplify=FALSE),
+  BetweenTreatment_2021_2021 = expand.grid(A=s_aph21, B=s_ctl21,
+                                           stringsAsFactors=FALSE),
+  BetweenTreatment_2022_2022 = expand.grid(A=s_aph22, B=s_ctl22,
+                                           stringsAsFactors=FALSE),
+  BetweenYear_0_2021         = expand.grid(A=s_init,  B=all21,
+                                           stringsAsFactors=FALSE),
+  BetweenYear_0_2022         = expand.grid(A=s_init,  B=all22,
+                                           stringsAsFactors=FALSE),
+  BetweenYear_2021_2022      = expand.grid(A=all21,   B=all22,
+                                           stringsAsFactors=FALSE)
+)
+
+# helper to extract numeric Fst values from a 2‐col df of pairs
+get_vals <- function(df_pairs) {
+  fst_mat[cbind(df_pairs[[1]], df_pairs[[2]])]
+}
+
+# 5) Loop through groups → compute mean, SE, 99% CI
+z99   <- qnorm(0.995)
+stats <- do.call(rbind, lapply(names(groups), function(g) {
+  lst <- groups[[g]]
+  
+  # turn combn‐list into a 2‐col data.frame
+  if (!inherits(lst, "data.frame")) {
+    df_pairs <- do.call(rbind, lapply(lst, function(x)
+      data.frame(A = x[1], B = x[2], stringsAsFactors=FALSE)))
+  } else {
+    df_pairs <- lst
+  }
+  
+  vals <- get_vals(df_pairs)
+  m    <- mean(vals)
+  se   <- sd(vals) / sqrt(length(vals))
+  ci99 <- m + c(-1,1) * z99 * se
+  
+  data.frame(
+    Group     = g,
+    N_pairs   = length(vals),
+    Mean_Fst  = m,
+    SE        = se,
+    CI99_low  = ci99[1],
+    CI99_high = ci99[2],
+    stringsAsFactors=FALSE
+  )
+}))
+rownames(stats) <- NULL
+print(stats)
+
+
+# 6) Barplot of Mean ± SE
+data.poolstat.summary.plot<-ggplot(stats, aes(x=Group, y=Mean_Fst)) +
+  geom_bar(stat="identity") +
+  geom_errorbar(aes(ymin=Mean_Fst - SE, ymax=Mean_Fst + SE),
+                width=0.2) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(x="", y=expression(F[ST]~"Mean ± SE"))
+
+ggsave(data.poolstat.summary.plot,file="./Results/Fst_summaryplot.pdf")
+
+
+# 7) Heatmap
+
+colnames(pw@pairwise.fst)
+row.names(pw@pairwise.fst)
 # Create the heatmap annotation
 col = list(year = c("0" = "lightgrey", "2021" = "darkgrey", "2022" = "black"),
           Treatment = c("Aphid" = "darkred", "Control" = "#56B4E9","Initial"="lightgrey") )
@@ -873,12 +956,10 @@ Treatment.ann <- HeatmapAnnotation(
 )
 
 
-
-fst.hm <- Heatmap(EAWAG.poolseq.allvsall@pairwise.fst,
+fst.hm <- Heatmap(pw@pairwise.fst,
 cluster_rows =TRUE,cluster_columns=TRUE,name="Fst",
 column_title = "Fst=(Q1-Q2)/(1 - Q2)",row_split=3,column_split = 3,
 top_annotation=Treatment.ann)
-
 
 save_pdf(
   fst.hm,"./Results/Fst_heatmap.pdf"
@@ -888,94 +969,9 @@ save_pdf(
 
 
 
-## creat barplots
-EAWAG.poolseq.pwfst<-melt(EAWAG.poolseq.allvsall@pairwise.fst) 
-
-colnames(EAWAG.poolseq.pwfst)<-c("Ind1","Ind2","Fst");
-
-row.names(poplist.int)<-poplist.int$SampleID
-EAWAG.poolseq.pwfst$Ind1_Treatment<-poplist.int[EAWAG.poolseq.pwfst$Ind1,"Treatment"]
-EAWAG.poolseq.pwfst$Ind2_Treatment<-poplist.int[EAWAG.poolseq.pwfst$Ind2,"Treatment"]
-EAWAG.poolseq.pwfst$Time<-paste(poplist.int[EAWAG.poolseq.pwfst$Ind1,"Time"],poplist.int[EAWAG.poolseq.pwfst$Ind2,"Time"],sep="_");
-
-EAWAG.poolseq.pwfst.combined<-EAWAG.poolseq.pwfst %>%
-  mutate(Fst_type=ifelse(Ind1_Treatment==Ind2_Treatment,"WithinTreatment","BetweenTreatment")) %>%
-  filter(!Ind1==Ind2)
-
-EAWAG.poolseq.pwfst.combined$Fst_type[EAWAG.poolseq.pwfst.combined$Ind1_Treatment=="Control" & EAWAG.poolseq.pwfst.combined$Ind2_Treatment=="Control"]<-"WithinControl";
-
-EAWAG.poolseq.pwfst.combined$Fst_type[EAWAG.poolseq.pwfst.combined$Ind1_Treatment=="Aphid" & EAWAG.poolseq.pwfst.combined$Ind2_Treatment=="Aphid"]<-"WithinAphid";
-head(EAWAG.poolseq.pwfst.combined)
-
-head(EAWAG.poolseq.pwfst.combined)
-
-EAWAG.poolseq.pwfst.combined.between<-EAWAG.poolseq.pwfst.combined[EAWAG.poolseq.pwfst.combined$Fst_type=="BetweenTreatment" ,]
-summary(lm(Fst~Time,data=EAWAG.poolseq.pwfst.combined.between[EAWAG.poolseq.pwfst.combined.between$Time=="2021_2021"| EAWAG.poolseq.pwfst.combined.between$Time=="2022_2022",]))
-
-EAWAG.poolseq.pwfst.combined.within<-EAWAG.poolseq.pwfst.combined[grep("Within",EAWAG.poolseq.pwfst.combined$Fst_type),] %>%
-    filter(Time=="Initial_Initial" | Time=="2021_2021"| Time=="2022_2022") %>%
-  mutate(Group=as.factor(paste(Fst_type,Time,sep="_")))
-
-model<-lm(Fst~Group,data=EAWAG.poolseq.pwfst.combined.within)
-emmeans(model, pairwise ~ Group)
-summary(glht(model, linfct = mcp(Group = 'Tukey')))
-
-
-EAWAG.poolseq.pwfst.combined.betweenYears<-EAWAG.poolseq.pwfst.combined %>%
-  filter(Time=="0_2021"|Time=="0_2022"|Time=="2021_2022") 
-EAWAG.poolseq.pwfst.combined.betweenYears$Time<-factor(EAWAG.poolseq.pwfst.combined.betweenYears$Time)
-model<-lm(Fst~Time,data=EAWAG.poolseq.pwfst.combined.betweenYears)
-summary(glht(model, linfct = mcp(Time = 'Tukey')))
-
-
-EAWAG.poolseq.pwfst.combined.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined[!EAWAG.poolseq.pwfst.combined$Ind1=="C3"|EAWAG.poolseq.pwfst.combined$Ind2=="C3", ],
-                                                    measurevar = "Fst",
-                                                  groupvars = c("Fst_type","Time"));
-
-EAWAG.poolseq.pwfst.combined.within.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
-    filter(Time=="2021_2021"|Time=="2022_2022"|Time=="0_0)") %>%
-    filter(!Fst_type=="BetweenTreatment")
-
-EAWAG.poolseq.pwfst.combined.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined,
-                                            measurevar = "Fst",
-                                            groupvars = c("Fst_type","Time"));
-EAWAG.poolseq.pwfst.combined.within.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
-  filter(Time=="2021_2021"|Time=="2022_2022"|Time=="0_0") %>%
-  filter(!Fst_type=="BetweenTreatment")
-
-
-EAWAG.poolseq.pwfst.combined.betweenTreatment.sum<-EAWAG.poolseq.pwfst.combined.sum %>%
-  filter(Time=="2021_2021"|Time=="2022_2022") %>%
-  filter(Fst_type=="BetweenTreatment")
-
-#EAWAG.poolseq.pwfst.combined.withinTreamtment<-
-
-EAWAG.poolseq.pwfst.combined.betweenYear.sum<-summarySE(data=EAWAG.poolseq.pwfst.combined,
-                                                        measurevar = "Fst",
-                                                        groupvars = c("Time")) %>%
-  filter(Time=="0_2021"|Time=="0_2022"|Time=="2021_2022") %>%
-  mutate(Fst_type="BetweenYear");
-
-EAWAG.poolseq.pwfst4plot<-rbind(EAWAG.poolseq.pwfst.combined.within.sum,
-                                EAWAG.poolseq.pwfst.combined.betweenTreatment.sum,EAWAG.poolseq.pwfst.combined.betweenYear.sum)
-
-EAWAG.poolseq.pwfst4plot$Fst_group<-paste(EAWAG.poolseq.pwfst4plot$Fst_type,EAWAG.poolseq.pwfst4plot$Time,sep="_");
-EAWAG.poolseq.pwfst4plot$Fst_group<-factor(EAWAG.poolseq.pwfst4plot$Fst_group,levels=c("WithinTreatment_0_0","WithinControl_2021_2021","WithinControl_2022_2022","WithinAphid_2021_2021",
-  "WithinAphid_2022_2022","BetweenTreatment_2021_2021","BetweenTreatment_2022_2022","BetweenYear_0_2021","BetweenYear_0_2022","BetweenYear_2021_2022"),ordered=T)
-
-data.poolstat.summary.plot<- ggplot(EAWAG.poolseq.pwfst4plot, aes(x=Fst_group, y=mean)) + 
-  geom_bar( aes(x=Fst_group, y=mean), stat="identity", fill="grey", alpha=0.5)+
-  # geom_point()+
-  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), width=.0,
-                position=position_dodge(0.01)) +
-  labs(title="Fst", x="Year", y = "Fst")+
-  theme_classic() 
-
-ggsave(data.poolstat.summary.plot,file="./Results/Fst_summaryplot.pdf")
-
-
+###########################################
 ### plot CMH results
-
+###########################################
 cmh.2021 <-fread("./data/cmh_test2021_update2.clean.bed", sep="\t", header=F);
 cmh.2022 <-fread("./data/cmh_test2022_update2.clean.bed", sep="\t", header=F);
 head(cmh.2021)
@@ -1015,7 +1011,7 @@ CMplot(data.combined,type="p",plot.type="m",LOG10=F,col=c("grey60","#4197d8"),
 
 
 ```
-## Analzye transplant experiment for D. magna and create Figure 4
+## Analzye transplant experiment for D. magna and create Figure 3
 
 ```{r Load Daphnia transplant data, echo=T}
 
@@ -1185,7 +1181,7 @@ ggsave(DM.TransplatPlot[[2]], file="./Results/DM_transplant_KW30.pdf",height  =5
 
 ```
 
-## Analzye transplant experiment of the duckweed and aphids and make Fig. 5
+## Analzye transplant experiment of the duckweed and aphids and make Figure 4
 
 ```{r Load transplant experiment data, echo=T}
 
