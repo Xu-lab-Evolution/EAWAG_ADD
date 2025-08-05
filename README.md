@@ -23,3 +23,8 @@ Data and code for reproducing Fig. 3, Fig. S15, Fig. S16, Fig. S17, Fig. S18, an
 
 ### **4.** [Transplant experiments](/5_transplant)
 Data and code for reproducing Fig. 4 and Fig. 5.
+
+
+The final version of the R-markdown file is: EAWAG_2025.Rmd
+For running this code, download the data.zip file, which contains the raw data.
+Some large intermeidate files (e.g., vcf) are deposited on https://doi.org/10.5061/dryad.xsj3tx9qd
